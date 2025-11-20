@@ -3,8 +3,9 @@ from collections import defaultdict
 
 import gymnasium
 import numpy as np
-from absl import app, flags
+from absl import app, flags, logging
 from tqdm import trange
+import imageio.v2 as imageio
 
 import ogbench.manipspace  # noqa
 from ogbench.manipspace.oracles.markov.button_markov import ButtonMarkovOracle
@@ -22,6 +23,7 @@ flags.DEFINE_integer('seed', 0, 'Random seed.')
 flags.DEFINE_string('env_name', 'cube-single-v0', 'Environment name.')
 flags.DEFINE_string('dataset_type', 'play', 'Dataset type.')
 flags.DEFINE_string('save_path', None, 'Save path.')
+flags.DEFINE_bool('save_first_episode_video', False, 'If true, save a video of the first episode.')
 flags.DEFINE_float('noise', 0.1, 'Action noise level.')
 flags.DEFINE_float('noise_smoothing', 0.5, 'Action noise smoothing level for PlanOracle.')
 flags.DEFINE_float('min_norm', 0.4, 'Minimum action norm for MarkovOracle.')
@@ -52,6 +54,7 @@ def main(_):
                 'cube': CubeMarkovOracle(env=env, min_norm=FLAGS.min_norm),
             }
         else:
+            logging.info("LANDED HERE")
             agents = {
                 'cube': CubePlanOracle(env=env, noise=FLAGS.noise, noise_smoothing=FLAGS.noise_smoothing),
             }
@@ -87,6 +90,7 @@ def main(_):
 
     # Collect data.
     dataset = defaultdict(list)
+    episode_frames = []
     total_steps = 0
     total_train_steps = 0
     num_train_episodes = FLAGS.num_episodes
@@ -96,6 +100,8 @@ def main(_):
         while True:
             ob, info = env.reset()
 
+            if ep_idx == 0 and FLAGS.save_first_episode_video:
+                episode_frames = [env.render()]
             # Set the cube stacking probability for this episode.
             if 'single' in FLAGS.env_name:
                 p_stack = 0.0
@@ -128,6 +134,9 @@ def main(_):
                 else:
                     # Get an action from the oracle.
                     action = agent.select_action(ob, info)
+                    # logging.info(f'action type = {type(action)}')
+                    # logging.info(f'action shape = {action.shape}')
+                    # logging.info(f'action = {action}')
                     action = np.array(action)
                     if oracle_type == 'markov':
                         # Add Gaussian noise to the action.
@@ -140,7 +149,11 @@ def main(_):
                     # Set a new task when the current task is done.
                     agent_ob, agent_info = env.unwrapped.set_new_target(p_stack=p_stack)
                     agent = agents[agent_info['privileged/target_task']]
+                    # logging.info('task was done, calling agent.reset()')
+                    # logging.info(f'type(agent) = {type(agent)}')
                     agent.reset(agent_ob, agent_info)
+                    # logging.info('finished calling agent.reset()')
+                    # logging.info(f'agent._plan = {agent._plan}')
 
                 dataset['observations'].append(ob)
                 dataset['actions'].append(action)
@@ -150,6 +163,9 @@ def main(_):
                 if has_button_states:
                     dataset['button_states'].append(info['prev_button_states'])
                 ep_qpos.append(info['prev_qpos'])
+
+                if ep_idx == 0 and FLAGS.save_first_episode_video:
+                    episode_frames.append(env.render())
 
                 ob = next_ob
                 step += 1
@@ -179,9 +195,29 @@ def main(_):
         if ep_idx < num_train_episodes:
             total_train_steps += step
 
+        if (
+            FLAGS.save_first_episode_video
+            and FLAGS.save_path is not None
+            and ep_idx == 0
+            and episode_frames
+        ):
+            save_base = pathlib.Path(FLAGS.save_path)
+            video_path = save_base.parent / f'{save_base.stem}_episode0.mp4'
+            video_path.parent.mkdir(parents=True, exist_ok=True)
+            fps = 30
+            with imageio.get_writer(
+                video_path.as_posix(),
+                fps=fps,
+                codec='libx264',
+                quality=8,
+                macro_block_size=None,
+            ) as writer:
+                for frame in episode_frames:
+                    writer.append_data(frame)
+
     print('Total steps:', total_steps)
 
-    train_path = FLAGS.save_path
+    train_path = FLAGS.save_path.replace('.npz', '-train.npz')
     val_path = FLAGS.save_path.replace('.npz', '-val.npz')
     pathlib.Path(train_path).parent.mkdir(parents=True, exist_ok=True)
 

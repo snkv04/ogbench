@@ -1,3 +1,4 @@
+from absl import logging
 import numpy as np
 from scipy.interpolate import interp1d
 from scipy.ndimage import gaussian_filter1d
@@ -63,6 +64,8 @@ class PlanOracle:
         )
 
     def compute_plan(self, times, poses, grasps):
+        # logging.info(f'called compute_plan()')
+
         # Interpolate grasps.
         grasp_interp = interp1d(times, grasps, kind='linear', axis=0, assume_sorted=True)
 
@@ -105,6 +108,7 @@ class PlanOracle:
         return self._done
 
     def reset(self, ob, info):
+        # logging.info('called PlanOracle.reset()')
         pass
 
     def select_action(self, ob, info):

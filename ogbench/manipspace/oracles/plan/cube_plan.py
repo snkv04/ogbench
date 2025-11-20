@@ -1,3 +1,4 @@
+from absl import logging
 import numpy as np
 
 from ogbench.manipspace import lie
@@ -13,6 +14,8 @@ class CubePlanOracle(PlanOracle):
         super().__init__(*args, **kwargs)
 
     def compute_keyframes(self, plan_input):
+        # logging.info('in compute_keyframes()')
+
         # Poses.
         poses = {}
 
@@ -76,6 +79,7 @@ class CubePlanOracle(PlanOracle):
         return times, poses, grasps
 
     def reset(self, ob, info):
+        # logging.info(f'called agent.reset()')
         target_block = info['privileged/target_block']
         plan_input = {
             'effector_initial': self.to_pose(
@@ -99,7 +103,11 @@ class CubePlanOracle(PlanOracle):
         times, poses, grasps = self.compute_keyframes(plan_input)
         poses = [poses[name] for name in times.keys()]
         grasps = [grasps[name] for name in times.keys()]
+        logging.info(f'times.keys() = {times.keys()}')
         times = list(times.values())
+        # logging.info(f'times = {times}')
+        # logging.info(f'keyframe poses = {poses}')
+        # logging.info(f'grasps = {grasps}')
 
         self._t_init = info['time'][0]
         self._t_max = times[-1]
