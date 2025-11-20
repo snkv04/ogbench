@@ -103,7 +103,7 @@ class CubePlanOracle(PlanOracle):
         times, poses, grasps = self.compute_keyframes(plan_input)
         poses = [poses[name] for name in times.keys()]
         grasps = [grasps[name] for name in times.keys()]
-        logging.info(f'times.keys() = {times.keys()}')
+        # logging.info(f'times.keys() = {times.keys()}')
         times = list(times.values())
         # logging.info(f'times = {times}')
         # logging.info(f'keyframe poses = {poses}')

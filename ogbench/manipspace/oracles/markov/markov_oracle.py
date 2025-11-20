@@ -14,7 +14,7 @@ class MarkovOracle:
         """
         self._env = env
         self._min_norm = min_norm
-        self._debug = False  # Set to True to print debug information.
+        self._debug = True  # Set to True to print debug information.
         self._done = False
 
         if self._debug:

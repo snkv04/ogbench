@@ -16,6 +16,7 @@ from ogbench.manipspace.oracles.plan.button_plan import ButtonPlanOracle
 from ogbench.manipspace.oracles.plan.cube_plan import CubePlanOracle
 from ogbench.manipspace.oracles.plan.drawer_plan import DrawerPlanOracle
 from ogbench.manipspace.oracles.plan.window_plan import WindowPlanOracle
+from ogbench.manipspace.oracles.hierarchical.cube_hierarchical import CubeHierarchicalOracle
 
 FLAGS = flags.FLAGS
 
@@ -30,6 +31,7 @@ flags.DEFINE_float('min_norm', 0.4, 'Minimum action norm for MarkovOracle.')
 flags.DEFINE_float('p_random_action', 0, 'Probability of selecting a random action.')
 flags.DEFINE_integer('num_episodes', 1000, 'Number of episodes.')
 flags.DEFINE_integer('max_episode_steps', 1001, 'Number of episodes.')
+flags.DEFINE_bool('hierarchical', False, 'If true and dataset_type is noisy, use hierarchical oracle for cube tasks.')
 
 
 def main(_):
@@ -50,9 +52,14 @@ def main(_):
     has_button_states = hasattr(env.unwrapped, '_cur_button_states')
     if 'cube' in FLAGS.env_name:
         if oracle_type == 'markov':
-            agents = {
-                'cube': CubeMarkovOracle(env=env, min_norm=FLAGS.min_norm),
-            }
+            if FLAGS.hierarchical:
+                agents = {
+                    'cube': CubeHierarchicalOracle(env=env, min_norm=FLAGS.min_norm),
+                }
+            else:
+                agents = {
+                    'cube': CubeMarkovOracle(env=env, min_norm=FLAGS.min_norm),
+                }
         else:
             logging.info("LANDED HERE")
             agents = {
@@ -138,8 +145,9 @@ def main(_):
                     # logging.info(f'action shape = {action.shape}')
                     # logging.info(f'action = {action}')
                     action = np.array(action)
-                    if oracle_type == 'markov':
+                    if oracle_type == 'markov' and not FLAGS.hierarchical:
                         # Add Gaussian noise to the action.
+                        # Skip noise for hierarchical oracles.
                         action = action + np.random.normal(0, [xi, xi, xi, xi * 3, xi * 10], action.shape)
                 action = np.clip(action, -1, 1)
                 next_ob, reward, terminated, truncated, info = env.step(action)
