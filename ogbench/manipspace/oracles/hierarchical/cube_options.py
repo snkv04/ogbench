@@ -86,6 +86,91 @@ class MoveToPositionOption(Option):
         return distance <= self._termination_threshold
 
 
+class LiftVerticallyOption(Option):
+    """Option to lift the gripper vertically while keeping x,y fixed.
+    
+    This is used for phases 4 and 8 - lifting straight up for clearance.
+    """
+    
+    def __init__(self, name, env, base_pos_fn, target_height, target_yaw_fn=None,
+                 gripper_state=1, min_norm=0.4, gain_pos=5, gain_yaw=3,
+                 termination_threshold=0.04):
+        """Initialize the lift vertically option.
+        
+        Args:
+            name: Option name
+            env: Environment instance
+            base_pos_fn: Function (ob, info) -> np.ndarray that returns base (x,y) position
+            target_height: Target z height to lift to
+            target_yaw_fn: Optional function (ob, info) -> float that returns target yaw
+            gripper_state: Gripper state to maintain (-1=open, 1=closed)
+            min_norm: Minimum norm for position differences
+            gain_pos: Position gain
+            gain_yaw: Yaw gain
+            termination_threshold: Distance threshold for termination
+        """
+        super().__init__(name, env)
+        self._base_pos_fn = base_pos_fn
+        self._target_height = target_height
+        self._target_yaw_fn = target_yaw_fn
+        self._gripper_state = gripper_state
+        self._min_norm = min_norm
+        self._gain_pos = gain_pos
+        self._gain_yaw = gain_yaw
+        self._termination_threshold = termination_threshold
+        
+    def shape_diff(self, diff):
+        """Shape the difference vector to have a minimum norm."""
+        diff_norm = np.linalg.norm(diff)
+        if diff_norm >= self._min_norm:
+            return diff
+        else:
+            return diff / (diff_norm + 1e-6) * self._min_norm
+            
+    def can_initiate(self, ob, info):
+        """Can always initiate this option."""
+        return True
+        
+    def initiate(self, ob, info):
+        """Initialize the option."""
+        super().initiate(ob, info)
+        
+    def select_action(self, ob, info):
+        """Select action to lift vertically."""
+        effector_pos = info['proprio/effector_pos']
+        effector_yaw = info['proprio/effector_yaw'][0]
+        
+        base_pos = self._base_pos_fn(ob, info)
+        target_pos = np.array([base_pos[0], base_pos[1], self._target_height])
+        
+        # Compute position difference (only z should change significantly)
+        diff = target_pos - effector_pos
+        diff = self.shape_diff(diff)
+        
+        # Compute yaw difference
+        if self._target_yaw_fn is not None:
+            target_yaw = self._target_yaw_fn(ob, info)
+            yaw_diff = target_yaw - effector_yaw
+        else:
+            yaw_diff = 0.0
+        
+        # Construct action
+        action = np.zeros(5)
+        action[:3] = diff[:3] * self._gain_pos
+        action[3] = yaw_diff * self._gain_yaw
+        action[4] = self._gripper_state
+        
+        return np.clip(action, -1, 1)
+        
+    def is_terminated(self, ob, info):
+        """Terminate when at target height."""
+        effector_pos = info['proprio/effector_pos']
+        base_pos = self._base_pos_fn(ob, info)
+        target_pos = np.array([base_pos[0], base_pos[1], self._target_height])
+        distance = np.linalg.norm(target_pos - effector_pos)
+        return distance <= self._termination_threshold
+
+
 class GraspOption(Option):
     """Option to grasp an object at the current position.
     

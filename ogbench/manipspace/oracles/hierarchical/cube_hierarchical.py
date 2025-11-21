@@ -5,6 +5,7 @@ from ogbench.manipspace.oracles.hierarchical.cube_options import (
     MoveToPositionOption,
     GraspOption,
     ReleaseOption,
+    LiftVerticallyOption,
 )
 
 
@@ -89,7 +90,31 @@ class CubeHierarchicalOracle(HierarchicalOracle):
             )
         )
         
-        # Option 4: Move above target
+        # Option 4: Move in the air (lift vertically after grasping)
+        def block_base_pos(ob, info):
+            # Keep x,y at block position, lift z
+            return info[f'privileged/block_{self._target_block}_pos']
+        
+        def target_yaw_for_lift(ob, info):
+            effector_yaw = info['proprio/effector_yaw'][0]
+            block_yaw = info[f'privileged/block_{self._target_block}_yaw'][0]
+            target_yaw = info['privileged/target_block_yaw'][0]
+            # Rotate from block_yaw to target_yaw
+            return self.shortest_yaw(effector_yaw, target_yaw)
+        
+        self._options.append(
+            LiftVerticallyOption(
+                'lift_after_grasp',
+                self._env,
+                block_base_pos,
+                target_height=0.36,  # block_above_offset[2] * 2 = 0.18 * 2
+                target_yaw_fn=target_yaw_for_lift,
+                gripper_state=1,  # Keep gripper closed
+                min_norm=self._min_norm,
+            )
+        )
+        
+        # Option 5: Move above target
         def target_above_pos(ob, info):
             target_pos = info['privileged/target_block_pos']
             return target_pos + np.array([0, 0, 0.18])
@@ -110,7 +135,7 @@ class CubeHierarchicalOracle(HierarchicalOracle):
             )
         )
         
-        # Option 5: Move to target
+        # Option 6: Move to target
         def target_pos(ob, info):
             return info['privileged/target_block_pos']
         
@@ -125,10 +150,30 @@ class CubeHierarchicalOracle(HierarchicalOracle):
             )
         )
         
-        # Option 6: Release
+        # Option 7: Release
         self._options.append(ReleaseOption('release', self._env))
         
-        # Option 7: Move to final position
+        # Option 8: Move in the air (lift vertically after releasing)
+        def block_base_pos_after_release(ob, info):
+            # Keep x,y at block position, lift z
+            return info[f'privileged/block_{self._target_block}_pos']
+        
+        def final_yaw_for_lift(ob, info):
+            return self._final_yaw
+        
+        self._options.append(
+            LiftVerticallyOption(
+                'lift_after_release',
+                self._env,
+                block_base_pos_after_release,
+                target_height=0.32,  # above_threshold * 2 = 0.16 * 2
+                target_yaw_fn=final_yaw_for_lift,
+                gripper_state=-1,  # Keep gripper open
+                min_norm=self._min_norm,
+            )
+        )
+        
+        # Option 9: Move to final position
         def final_pos(ob, info):
             return self._final_pos
         
@@ -153,47 +198,58 @@ class CubeHierarchicalOracle(HierarchicalOracle):
         hierarchical RL system, this would be replaced with a learned policy.
         """
         effector_pos = info['proprio/effector_pos']
+        effector_yaw = info['proprio/effector_yaw'][0]
         gripper_closed = info['proprio/gripper_contact'] > 0.5
         gripper_open = info['proprio/gripper_contact'] < 0.1
         
         block_pos = info[f'privileged/block_{self._target_block}_pos']
         target_pos = info['privileged/target_block_pos']
         
+        # Constants from cube_markov.py
+        above_threshold = 0.16
+        
         # Check current state
+        above = effector_pos[2] > above_threshold
         xy_aligned = np.linalg.norm(block_pos[:2] - effector_pos[:2]) <= 0.04
         pos_aligned = np.linalg.norm(block_pos - effector_pos) <= 0.02
+        target_xy_aligned = np.linalg.norm(target_pos[:2] - block_pos[:2]) <= 0.04
         target_pos_aligned = np.linalg.norm(target_pos - block_pos) <= 0.02
         final_pos_aligned = np.linalg.norm(self._final_pos - effector_pos) <= 0.04
         
         # High-level policy: select appropriate option based on state
         if not target_pos_aligned:
-            # Need to pick up and move the block
+            # Phases 1-6: Pick up and move block to target
             if not xy_aligned:
-                return self._options[0]  # move_above_block
+                # Phase 1: Move above the block
+                return self._options[0]
             elif not pos_aligned:
-                return self._options[1]  # move_to_block
-            elif not gripper_closed:
-                return self._options[2]  # grasp_block
+                # Phase 2: Move to the block
+                return self._options[1]
+            elif pos_aligned and not gripper_closed:
+                # Phase 3: Grasp block
+                return self._options[2]
+            elif pos_aligned and gripper_closed and not above and not target_xy_aligned:
+                # Phase 4: Move in the air after grasping (lift vertically)
+                return self._options[3]
+            elif pos_aligned and gripper_closed and above and not target_xy_aligned:
+                # Phase 5: Move above the target
+                return self._options[4]
             else:
-                # Block is grasped, move to target
-                above_threshold = effector_pos[2] > 0.16
-                target_xy_aligned = np.linalg.norm(target_pos[:2] - block_pos[:2]) <= 0.04
-                
-                if not above_threshold or not target_xy_aligned:
-                    return self._options[3]  # move_above_target
-                else:
-                    return self._options[4]  # move_to_target
+                # Phase 6: Move to the target
+                return self._options[5]
         else:
-            # Block is at target, release and move away
+            # Phases 7-9: Block is at target, release and move away
             if not gripper_open:
-                return self._options[5]  # release
-            elif not final_pos_aligned:
-                return self._options[6]  # move_to_final
+                # Phase 7: Release
+                return self._options[6]
+            elif gripper_open and not above:
+                # Phase 8: Move in the air after releasing (lift vertically)
+                return self._options[7]
             else:
-                # Task complete
-                self._done = True
-                # Return a no-op action
-                return np.zeros(5)
+                # Phase 9: Move to the final position
+                if final_pos_aligned:
+                    self._done = True
+                return self._options[8]
         
     def select_action(self, ob, info):
         """Select action (handles options automatically)."""
