@@ -216,16 +216,16 @@ def main(_):
             save_base = pathlib.Path(FLAGS.save_path)
             video_path = save_base.parent / f'{save_base.stem}_episode0.mp4'
             video_path.parent.mkdir(parents=True, exist_ok=True)
-            fps = 30
             with imageio.get_writer(
                 video_path.as_posix(),
-                fps=fps,
+                fps=30,
                 codec='libx264',
                 quality=8,
                 macro_block_size=None,
             ) as writer:
                 for frame in episode_frames:
                     writer.append_data(frame)
+            logging.info(f'Saved video of first episode to: {video_path.as_posix()}')
 
     print('Total steps:', total_steps)
 
@@ -250,6 +250,7 @@ def main(_):
 
     for path, dataset in [(train_path, train_dataset), (val_path, val_dataset)]:
         np.savez_compressed(path, **dataset)
+        logging.info(f'Saved dataset to: {path}')
 
 
 if __name__ == '__main__':
