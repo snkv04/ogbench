@@ -39,6 +39,11 @@ def main(_):
     # 'play': Use a non-Markovian oracle (PlanOracle) that follows a pre-computed plan.
     # 'noisy': Use a Markovian, closed-loop oracle (MarkovOracle) with Gaussian action noise.
 
+    # Set default save_path based on env_name and dataset_type if not provided.
+    if FLAGS.save_path is None:
+        dataset_suffix = 'hrl' if (FLAGS.hierarchical and FLAGS.dataset_type == 'noisy') else FLAGS.dataset_type
+        FLAGS.save_path = f'.ogbench/data/{FLAGS.env_name}-{dataset_suffix}.npz'
+
     # Initialize environment.
     env = gymnasium.make(
         FLAGS.env_name,
