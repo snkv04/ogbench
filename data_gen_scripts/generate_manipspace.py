@@ -145,9 +145,8 @@ def main(_):
                     # logging.info(f'action shape = {action.shape}')
                     # logging.info(f'action = {action}')
                     action = np.array(action)
-                    if oracle_type == 'markov' and not FLAGS.hierarchical:
+                    if oracle_type == 'markov':
                         # Add Gaussian noise to the action.
-                        # Skip noise for hierarchical oracles.
                         action = action + np.random.normal(0, [xi, xi, xi, xi * 3, xi * 10], action.shape)
                 action = np.clip(action, -1, 1)
                 next_ob, reward, terminated, truncated, info = env.step(action)
