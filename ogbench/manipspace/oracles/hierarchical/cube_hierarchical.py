@@ -256,15 +256,10 @@ class CubeHierarchicalOracle(HierarchicalOracle):
                 # Phase 8: Move in the air after releasing (lift vertically)
                 return self._options[7]
             else:
-                # Phase 9: Move to the final position or execute no-op
-                no_op_at_end = True
-                if no_op_at_end:
+                # Phase 9: Move to the final position
+                if final_pos_aligned:
                     self._done = True
-                    return self._options[9]
-                else:
-                    if final_pos_aligned:
-                        self._done = True
-                    return self._options[8]
+                return self._options[8]
         
     def select_action(self, ob, info):
         """Select action (handles options automatically)."""

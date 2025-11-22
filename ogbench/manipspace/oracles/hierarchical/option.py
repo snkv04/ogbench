@@ -23,7 +23,7 @@ class Option:
         self._step = 0
         
     def can_initiate(self, ob, info):
-        """Check if this option can be initiated in the current state.
+        """Check if the current state is in the initiation set for this option.
         
         Args:
             ob: Current observation
@@ -59,7 +59,7 @@ class Option:
         raise NotImplementedError
         
     def is_terminated(self, ob, info):
-        """Check if the option should terminate.
+        """Check if the current state is in the termination set for this option.
         
         Args:
             ob: Current observation
