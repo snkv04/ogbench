@@ -79,6 +79,11 @@ class Option:
     def active(self):
         """Whether the option is currently active."""
         return self._active
+    
+    @property
+    def step_count(self):
+        """Get the current step count."""
+        return self._step
         
     def step(self):
         """Increment internal step counter."""

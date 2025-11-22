@@ -1,8 +1,11 @@
+import logging
 import numpy as np
 from typing import Union, List, Optional
 
 from ogbench.manipspace.oracles.markov.markov_oracle import MarkovOracle
 from ogbench.manipspace.oracles.hierarchical.option import Option
+
+logger = logging.getLogger(__name__)
 
 
 class HierarchicalOracle(MarkovOracle):
@@ -27,6 +30,7 @@ class HierarchicalOracle(MarkovOracle):
         self._options = options or []
         self._active_option = None
         self._primitive_action_space_size = 5  # Default action space size
+        self._option_step_counts = []  # Track step counts for terminated options
         
     def add_option(self, option):
         """Add an option to the available options.
@@ -71,6 +75,7 @@ class HierarchicalOracle(MarkovOracle):
             
             # Check if option should terminate
             if self._active_option.is_terminated(ob, info):
+                self._record_terminated_option()
                 self._active_option.reset()
                 self._active_option = None
                 
@@ -88,6 +93,7 @@ class HierarchicalOracle(MarkovOracle):
             
             # Check termination immediately (in case option terminates in one step)
             if self._active_option.is_terminated(ob, info):
+                self._record_terminated_option()
                 self._active_option.reset()
                 self._active_option = None
                 
@@ -109,6 +115,13 @@ class HierarchicalOracle(MarkovOracle):
             self._active_option = None
         for option in self._options:
             option.reset()
+    
+    def _record_terminated_option(self):
+        """Record information about a terminated option."""
+        step_count = self._active_option.step_count
+        self._option_step_counts.append(step_count)
+        avg_steps = np.mean(self._option_step_counts)
+        logger.info(f"Average option step count: {avg_steps:.2f} (based on {len(self._option_step_counts)} terminated options)")
             
     @property
     def active_option(self):
