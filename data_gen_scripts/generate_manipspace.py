@@ -1,11 +1,13 @@
 import pathlib
 from collections import defaultdict
+import time
 
 import gymnasium
 import numpy as np
 from absl import app, flags, logging
 from tqdm import trange
 import imageio.v2 as imageio
+import cv2
 
 import ogbench.manipspace  # noqa
 from ogbench.manipspace.oracles.markov.button_markov import ButtonMarkovOracle
@@ -32,6 +34,24 @@ flags.DEFINE_float('p_random_action', 0, 'Probability of selecting a random acti
 flags.DEFINE_integer('num_episodes', 1000, 'Number of episodes.')
 flags.DEFINE_integer('max_episode_steps', 1001, 'Number of episodes.')
 flags.DEFINE_bool('hierarchical', False, 'If true and dataset_type is noisy, use hierarchical oracle for cube tasks.')
+flags.DEFINE_bool('render_realtime', False, 'If true, render all frames in a separate window in real-time.')
+flags.DEFINE_float('render_delay', 0.05, 'Delay between frames in seconds when rendering in real-time.')
+
+
+def render_frame_realtime(env, window_name):
+    """Render a frame in real-time if rendering is enabled.
+    
+    Args:
+        env: The environment to render.
+        window_name: Name of the OpenCV window to display the frame in.
+    """
+    if FLAGS.render_realtime:
+        frame = env.render()
+        # Convert RGB to BGR for OpenCV
+        frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        cv2.imshow(window_name, frame_bgr)
+        cv2.waitKey(1)
+        time.sleep(FLAGS.render_delay)
 
 
 def main(_):
@@ -107,6 +127,13 @@ def main(_):
     total_train_steps = 0
     num_train_episodes = FLAGS.num_episodes
     num_val_episodes = FLAGS.num_episodes // 10
+    
+    # Initialize window for real-time rendering if enabled
+    window_name = 'Real-time Rendering'
+    if FLAGS.render_realtime:
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(window_name, 800, 600)
+    
     for ep_idx in trange(num_train_episodes + num_val_episodes):
         # Have an additional while loop to handle rare cases with undesirable states (for the Scene environment).
         while True:
@@ -114,6 +141,10 @@ def main(_):
 
             if ep_idx == 0 and FLAGS.save_first_episode_video:
                 episode_frames = [env.render()]
+            
+            # Render initial frame in real-time if enabled
+            render_frame_realtime(env, window_name)
+
             # Set the cube stacking probability for this episode.
             if 'single' in FLAGS.env_name:
                 p_stack = 0.0
@@ -178,6 +209,9 @@ def main(_):
 
                 if ep_idx == 0 and FLAGS.save_first_episode_video:
                     episode_frames.append(env.render())
+                
+                # Render frame in real-time if enabled
+                render_frame_realtime(env, window_name)
 
                 ob = next_ob
                 step += 1
@@ -251,6 +285,10 @@ def main(_):
     for path, dataset in [(train_path, train_dataset), (val_path, val_dataset)]:
         np.savez_compressed(path, **dataset)
         logging.info(f'Saved dataset to: {path}')
+    
+    # Clean up rendering window if it was opened
+    if FLAGS.render_realtime:
+        cv2.destroyAllWindows()
 
 
 if __name__ == '__main__':
