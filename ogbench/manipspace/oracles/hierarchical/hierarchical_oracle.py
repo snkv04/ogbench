@@ -75,7 +75,7 @@ class HierarchicalOracle(MarkovOracle):
             
             # Check if option should terminate
             if self._active_option.is_terminated(ob, info):
-                self._record_terminated_option()
+                # self._record_terminated_option()
                 self._active_option.reset()
                 self._active_option = None
                 
@@ -87,13 +87,14 @@ class HierarchicalOracle(MarkovOracle):
         # If it's an Option, initiate it
         if isinstance(high_level_action, Option):
             self._active_option = high_level_action
+            logging.info(f"Selected new option: {self._active_option.name}")
             self._active_option.initiate(ob, info)
             action = self._active_option.select_action(ob, info)
             self._active_option.step()
             
             # Check termination immediately (in case option terminates in one step)
             if self._active_option.is_terminated(ob, info):
-                self._record_terminated_option()
+                # self._record_terminated_option()
                 self._active_option.reset()
                 self._active_option = None
                 
