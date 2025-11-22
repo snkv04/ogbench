@@ -286,3 +286,40 @@ class ReleaseOption(Option):
         gripper_open = info['proprio/gripper_contact'] < 0.1
         return gripper_open
 
+
+class NoOpOption(Option):
+    """Option that performs no operation (zero actions) for a fixed number of timesteps."""
+    
+    def __init__(self, name, env, duration=10):
+        """Initialize the no-op option.
+        
+        Args:
+            name: Option name
+            env: Environment instance
+            duration: Number of timesteps the option should last
+        """
+        super().__init__(name, env)
+        self._duration = duration
+        
+    def can_initiate(self, ob, info):
+        """Can always initiate this option."""
+        return True
+        
+    def initiate(self, ob, info):
+        """Initialize the option."""
+        super().initiate(ob, info)
+        
+    def select_action(self, ob, info):
+        """Select zero action (no-op).
+        
+        Returns a zero action, which in the manipspace environment's relative
+        control scheme means "no change" - the effector will maintain its
+        current position, orientation, and gripper state.
+        """
+        action = np.zeros(5)
+        return action
+        
+    def is_terminated(self, ob, info):
+        """Terminate after the specified duration."""
+        return self._step >= self._duration
+

@@ -6,6 +6,7 @@ from ogbench.manipspace.oracles.hierarchical.cube_options import (
     GraspOption,
     ReleaseOption,
     LiftVerticallyOption,
+    NoOpOption,
 )
 
 
@@ -191,6 +192,15 @@ class CubeHierarchicalOracle(HierarchicalOracle):
             )
         )
         
+        # Option 10: No-op option
+        self._options.append(
+            NoOpOption(
+                'no_op',
+                self._env,
+                duration=10,
+            )
+        )
+        
     def select_high_level_action(self, ob, info):
         """Select high-level action (option or primitive).
         
@@ -246,10 +256,15 @@ class CubeHierarchicalOracle(HierarchicalOracle):
                 # Phase 8: Move in the air after releasing (lift vertically)
                 return self._options[7]
             else:
-                # Phase 9: Move to the final position
-                if final_pos_aligned:
+                # Phase 9: Move to the final position or execute no-op
+                no_op_at_end = True
+                if no_op_at_end:
                     self._done = True
-                return self._options[8]
+                    return self._options[9]
+                else:
+                    if final_pos_aligned:
+                        self._done = True
+                    return self._options[8]
         
     def select_action(self, ob, info):
         """Select action (handles options automatically)."""
