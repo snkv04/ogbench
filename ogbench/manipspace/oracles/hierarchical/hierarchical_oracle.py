@@ -87,7 +87,7 @@ class HierarchicalOracle(MarkovOracle):
         # If it's an Option, initiate it
         if isinstance(high_level_action, Option):
             self._active_option = high_level_action
-            logging.info(f"Selected new option: {self._active_option.name}")
+            # logging.info(f"Selected new option: {self._active_option.name}")
             self._active_option.initiate(ob, info)
             action = self._active_option.select_action(ob, info)
             self._active_option.step()

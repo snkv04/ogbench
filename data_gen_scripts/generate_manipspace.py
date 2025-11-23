@@ -137,7 +137,7 @@ def main(_):
     for ep_idx in trange(num_train_episodes + num_val_episodes):
         # Have an additional while loop to handle rare cases with undesirable states (for the Scene environment).
         while True:
-            logging.info(f"Starting episode {ep_idx + 1}")
+            # logging.info(f"Starting episode {ep_idx + 1}")
             ob, info = env.reset()
 
             if ep_idx == 0 and FLAGS.save_first_episode_video:
@@ -195,12 +195,8 @@ def main(_):
                     agent_ob, agent_info = env.unwrapped.set_new_target(p_stack=p_stack)
                     new_task = agent_info['privileged/target_task']
                     agent = agents[new_task]
-                    logging.info(f"Task '{old_task}' completed. Starting new task: '{new_task}'")
-                    # logging.info('task was done, calling agent.reset()')
-                    # logging.info(f'type(agent) = {type(agent)}')
+                    # logging.info(f"Task '{old_task}' completed. Starting new task: '{new_task}'")
                     agent.reset(agent_ob, agent_info)
-                    # logging.info('finished calling agent.reset()')
-                    # logging.info(f'agent._plan = {agent._plan}')
 
                 dataset['observations'].append(ob)
                 dataset['actions'].append(action)

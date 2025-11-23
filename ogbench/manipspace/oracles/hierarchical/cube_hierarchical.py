@@ -1,4 +1,6 @@
+from absl import logging
 import numpy as np
+import random
 
 from ogbench.manipspace.oracles.hierarchical.hierarchical_oracle import HierarchicalOracle
 from ogbench.manipspace.oracles.hierarchical.cube_options import (
@@ -17,11 +19,19 @@ class CubeHierarchicalOracle(HierarchicalOracle):
     policy selects options that encapsulate common manipulation behaviors.
     """
     
-    def __init__(self, max_step=200, *args, **kwargs):
-        """Initialize the hierarchical cube oracle."""
+    def __init__(self, max_step=200, no_op_option_prob=0.05, suboptimal_option_prob=0.05, *args, **kwargs):
+        """Initialize the hierarchical cube oracle.
+        
+        Args:
+            max_step: Maximum number of steps per episode
+            no_op_option_prob: Probability of selecting the no-op option instead of the normal option
+            suboptimal_option_prob: Probability of selecting a random suboptimal option
+        """
         super().__init__(options=[], *args, **kwargs)
         self._max_step = max_step
         self._step = 0
+        self._no_op_option_prob = no_op_option_prob
+        self._suboptimal_option_prob = suboptimal_option_prob
         
         # These will be set in reset()
         self._target_block = None
@@ -204,8 +214,12 @@ class CubeHierarchicalOracle(HierarchicalOracle):
     def select_high_level_action(self, ob, info):
         """Select high-level action (option or primitive).
         
-        This implements a simple rule-based high-level policy. In a learned
-        hierarchical RL system, this would be replaced with a learned policy.
+        This implements a simple rule-based high-level policy with stochasticity.
+        With probability no_op_option_prob, selects the no-op option.
+        With probability suboptimal_option_prob, selects a random suboptimal option.
+        Otherwise, selects the optimal option based on the current state.
+        
+        In a learned hierarchical RL system, this would be replaced with a learned policy.
         """
         effector_pos = info['proprio/effector_pos']
         effector_yaw = info['proprio/effector_yaw'][0]
@@ -231,35 +245,58 @@ class CubeHierarchicalOracle(HierarchicalOracle):
             # Phases 1-6: Pick up and move block to target
             if not xy_aligned:
                 # Phase 1: Move above the block
-                return self._options[0]
+                normal_option = self._options[0]
             elif not pos_aligned:
                 # Phase 2: Move to the block
-                return self._options[1]
+                normal_option = self._options[1]
             elif pos_aligned and not gripper_closed:
                 # Phase 3: Grasp block
-                return self._options[2]
+                normal_option = self._options[2]
             elif pos_aligned and gripper_closed and not above and not target_xy_aligned:
                 # Phase 4: Move in the air after grasping (lift vertically)
-                return self._options[3]
+                normal_option = self._options[3]
             elif pos_aligned and gripper_closed and above and not target_xy_aligned:
                 # Phase 5: Move above the target
-                return self._options[4]
+                normal_option = self._options[4]
             else:
                 # Phase 6: Move to the target
-                return self._options[5]
+                normal_option = self._options[5]
         else:
             # Phases 7-9: Block is at target, release and move away
             if not gripper_open:
                 # Phase 7: Release
-                return self._options[6]
+                normal_option = self._options[6]
             elif gripper_open and not above:
                 # Phase 8: Move in the air after releasing (lift vertically)
-                return self._options[7]
+                normal_option = self._options[7]
             else:
                 # Phase 9: Move to the final position
                 if final_pos_aligned:
                     self._done = True
-                return self._options[8]
+                normal_option = self._options[8]
+        
+        # Apply stochasticity: with some probability, replace with no-op or suboptimal option
+        rand_val = random.random()
+        no_op_option_idx = len(self._options) - 1
+        if rand_val < self._no_op_option_prob:
+            return self._options[no_op_option_idx]
+        elif rand_val < (self._no_op_option_prob + self._suboptimal_option_prob):
+            # Filter to only options that can be initiated (excluding the normal one and no-op)
+            normal_option_idx = self._options.index(normal_option)
+            available_options = [
+                (i, opt) for i, opt in enumerate(self._options)
+                if i != normal_option_idx and i != no_op_option_idx and opt.can_initiate(ob, info)
+            ]
+            
+            if len(available_options) > 0:
+                # Randomly select from available options that can be initiated
+                selected_idx, _ = random.choice(available_options)
+                return self._options[selected_idx]
+            else:
+                # No valid suboptimal options available, fall back to normal option
+                return normal_option
+        else:
+            return normal_option
         
     def select_action(self, ob, info):
         """Select action (handles options automatically)."""
