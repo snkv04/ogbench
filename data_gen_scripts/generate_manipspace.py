@@ -167,6 +167,11 @@ def main(_):
             agent = agents[info['privileged/target_task']]
             agent.reset(ob, info)
 
+            # Track option state for hierarchical oracles
+            track_hierarchical_info = (oracle_type == 'markov' and FLAGS.hierarchical and 
+                                       isinstance(agent, CubeHierarchicalOracle))
+            prev_option_terminated = True  # Whether or not an option ended in the previous timestep
+
             done = False
             step = 0
             ep_qpos = []
@@ -189,6 +194,20 @@ def main(_):
                 next_ob, reward, terminated, truncated, info = env.step(action)
                 done = terminated or truncated
 
+                if track_hierarchical_info:
+                    # Get current active option after step
+                    current_active_option = agent.active_option
+                    assert current_active_option is not None
+                    
+                    # Determine option index and name
+                    option_idx = agent._options.index(current_active_option)
+                    option_name = current_active_option.name
+                    option_initiated = prev_option_terminated
+                    option_terminated = not current_active_option.active
+                    
+                    # Update flag
+                    prev_option_terminated = option_terminated
+
                 if agent.done:
                     # Set a new task when the current task is done.
                     old_task = info.get('privileged/target_task', 'unknown')
@@ -197,6 +216,17 @@ def main(_):
                     agent = agents[new_task]
                     # logging.info(f"Task '{old_task}' completed. Starting new task: '{new_task}'")
                     agent.reset(agent_ob, agent_info)
+
+                    # New option will begin at the next timestep because the agent was reset
+                    if track_hierarchical_info:
+                        option_terminated = True
+                        prev_option_terminated = True
+
+                if track_hierarchical_info:
+                    dataset['option_indices'].append(option_idx)
+                    dataset['option_names'].append(option_name)
+                    dataset['option_initiated'].append(option_initiated)
+                    dataset['option_terminated'].append(option_terminated)
 
                 dataset['observations'].append(ob)
                 dataset['actions'].append(action)
@@ -277,6 +307,12 @@ def main(_):
             dtype = bool
         elif k == 'button_states':
             dtype = np.int64
+        elif k == 'option_indices':
+            dtype = np.int32
+        elif k == 'option_names':
+            dtype = object  # String array
+        elif k in ['option_initiated', 'option_terminated']:
+            dtype = bool
         else:
             dtype = np.float32
         train_dataset[k] = np.array(v[:total_train_steps], dtype=dtype)

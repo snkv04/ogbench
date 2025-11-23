@@ -76,8 +76,7 @@ class HierarchicalOracle(MarkovOracle):
             # Check if option should terminate
             if self._active_option.is_terminated(ob, info):
                 # self._record_terminated_option()
-                self._active_option.reset()
-                self._active_option = None
+                self._active_option.reset()  # Deactivates the option but keeps the reference
                 
             return action
         
@@ -95,8 +94,7 @@ class HierarchicalOracle(MarkovOracle):
             # Check termination immediately (in case option terminates in one step)
             if self._active_option.is_terminated(ob, info):
                 # self._record_terminated_option()
-                self._active_option.reset()
-                self._active_option = None
+                self._active_option.reset()  # Deactivates the option but keeps the reference
                 
             return action
         
@@ -113,6 +111,7 @@ class HierarchicalOracle(MarkovOracle):
         super().reset(ob, info)
         if self._active_option is not None:
             self._active_option.reset()
+            # Set _active_option to None only on full reset of agent to clear the reference
             self._active_option = None
         for option in self._options:
             option.reset()
