@@ -53,6 +53,15 @@ class CubeHierarchicalOracle(HierarchicalOracle):
         # Create options for this task
         self._options = []
         
+        # Option 0: No-op option (always at index 0)
+        self._options.append(
+            NoOpOption(
+                'no_op',
+                self._env,
+                duration=10,
+            )
+        )
+        
         # Option 1: Move above block
         def block_above_pos(ob, info):
             block_pos = info[f'privileged/block_{self._target_block}_pos']
@@ -202,15 +211,6 @@ class CubeHierarchicalOracle(HierarchicalOracle):
             )
         )
         
-        # Option 10: No-op option
-        self._options.append(
-            NoOpOption(
-                'no_op',
-                self._env,
-                duration=10,
-            )
-        )
-        
     def select_high_level_action(self, ob, info):
         """Select high-level action (option or primitive).
         
@@ -241,43 +241,44 @@ class CubeHierarchicalOracle(HierarchicalOracle):
         final_pos_aligned = np.linalg.norm(self._final_pos - effector_pos) <= 0.04
         
         # High-level policy: select appropriate option based on state
+        # Note: No-op is at index 0, normal options are at indices 1-9
         if not target_pos_aligned:
             # Phases 1-6: Pick up and move block to target
             if not xy_aligned:
                 # Phase 1: Move above the block
-                normal_option = self._options[0]
+                normal_option = self._options[1]
             elif not pos_aligned:
                 # Phase 2: Move to the block
-                normal_option = self._options[1]
+                normal_option = self._options[2]
             elif pos_aligned and not gripper_closed:
                 # Phase 3: Grasp block
-                normal_option = self._options[2]
+                normal_option = self._options[3]
             elif pos_aligned and gripper_closed and not above and not target_xy_aligned:
                 # Phase 4: Move in the air after grasping (lift vertically)
-                normal_option = self._options[3]
+                normal_option = self._options[4]
             elif pos_aligned and gripper_closed and above and not target_xy_aligned:
                 # Phase 5: Move above the target
-                normal_option = self._options[4]
+                normal_option = self._options[5]
             else:
                 # Phase 6: Move to the target
-                normal_option = self._options[5]
+                normal_option = self._options[6]
         else:
             # Phases 7-9: Block is at target, release and move away
             if not gripper_open:
                 # Phase 7: Release
-                normal_option = self._options[6]
+                normal_option = self._options[7]
             elif gripper_open and not above:
                 # Phase 8: Move in the air after releasing (lift vertically)
-                normal_option = self._options[7]
+                normal_option = self._options[8]
             else:
                 # Phase 9: Move to the final position
                 if final_pos_aligned:
                     self._done = True
-                normal_option = self._options[8]
+                normal_option = self._options[9]
         
         # Apply stochasticity: with some probability, replace with no-op or suboptimal option
         rand_val = random.random()
-        no_op_option_idx = len(self._options) - 1
+        no_op_option_idx = 0  # No-op is always at index 0
         if rand_val < self._no_op_option_prob:
             return self._options[no_op_option_idx]
         elif rand_val < (self._no_op_option_prob + self._suboptimal_option_prob):
