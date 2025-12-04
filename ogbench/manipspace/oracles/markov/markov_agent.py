@@ -1,11 +1,17 @@
 import numpy as np
 
 
-class MarkovOracle:
-    """Markovian oracle for manipulation tasks."""
+class MarkovAgent:
+    """Base class for Markovian agents in manipulation tasks.
+    
+    A Markovian agent selects actions based only on the current observation,
+    without maintaining internal state across timesteps. This class provides
+    utility methods for manipulation and can be subclassed to create either
+    rule-based oracles or learned policies.
+    """
 
     def __init__(self, env, min_norm=0.4):
-        """Initialize the oracle.
+        """Initialize the agent.
 
         Args:
             env: Environment.

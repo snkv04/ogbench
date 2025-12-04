@@ -2,10 +2,10 @@ from absl import logging
 import numpy as np
 
 from ogbench.manipspace import lie
-from ogbench.manipspace.oracles.plan.plan_oracle import PlanOracle
+from ogbench.manipspace.oracles.plan.plan_agent import PlanAgent
 
 
-class CubePlanOracle(PlanOracle):
+class CubePlanOracle(PlanAgent):
     def __init__(
         self,
         *args,

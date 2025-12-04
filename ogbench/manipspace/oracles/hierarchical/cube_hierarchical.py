@@ -2,7 +2,7 @@ from absl import logging
 import numpy as np
 import random
 
-from ogbench.manipspace.oracles.hierarchical.hierarchical_oracle import HierarchicalOracle
+from ogbench.manipspace.oracles.hierarchical.hierarchical_agent import HierarchicalAgent
 from ogbench.manipspace.oracles.hierarchical.cube_options import (
     MoveToPositionOption,
     GraspOption,
@@ -12,7 +12,7 @@ from ogbench.manipspace.oracles.hierarchical.cube_options import (
 )
 
 
-class CubeHierarchicalOracle(HierarchicalOracle):
+class CubeHierarchicalOracle(HierarchicalAgent):
     """Hierarchical oracle for cube manipulation using options.
     
     This demonstrates how to use the hierarchical framework. The high-level

@@ -1,9 +1,9 @@
 import numpy as np
 
-from ogbench.manipspace.oracles.plan.plan_oracle import PlanOracle
+from ogbench.manipspace.oracles.plan.plan_agent import PlanAgent
 
 
-class DrawerPlanOracle(PlanOracle):
+class DrawerPlanOracle(PlanAgent):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 

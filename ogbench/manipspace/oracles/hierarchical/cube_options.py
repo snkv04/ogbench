@@ -1,7 +1,7 @@
 import numpy as np
 
 from ogbench.manipspace.oracles.hierarchical.option import Option
-from ogbench.manipspace.oracles.markov.markov_oracle import MarkovOracle
+from ogbench.manipspace.oracles.markov.markov_agent import MarkovAgent
 
 
 class MoveToPositionOption(Option):

@@ -2,29 +2,30 @@ import logging
 import numpy as np
 from typing import Union, List, Optional
 
-from ogbench.manipspace.oracles.markov.markov_oracle import MarkovOracle
+from ogbench.manipspace.oracles.markov.markov_agent import MarkovAgent
 from ogbench.manipspace.oracles.hierarchical.option import Option
 
 logger = logging.getLogger(__name__)
 
 
-class HierarchicalOracle(MarkovOracle):
-    """Hierarchical oracle that can select either primitive actions or options.
+class HierarchicalAgent(MarkovAgent):
+    """Base class for hierarchical agents that can select primitive actions or options.
     
-    The agent can choose between:
-    - Primitive actions: Single-timestep actions (normal actions)
-    - Options: Multi-timestep actions that run until termination
+    This agent operates at two levels:
+    - High-level policy: Selects either primitive actions or options
+    - Low-level policy: Executes intra-option policies when an option is active
     
-    When an option is selected, it executes its intra-option policy until
-    it terminates, then control returns to the high-level policy.
+    Options are multi-timestep actions that run until their termination condition
+    is met. This class can be subclassed to create either rule-based hierarchical 
+    oracles or learned hierarchical policies.
     """
     
     def __init__(self, options: Optional[List] = None, *args, **kwargs):
-        """Initialize the hierarchical oracle.
+        """Initialize the hierarchical agent.
         
         Args:
             options: List of Option instances that can be selected
-            *args, **kwargs: Arguments passed to MarkovOracle
+            *args, **kwargs: Arguments passed to MarkovAgent
         """
         super().__init__(*args, **kwargs)
         self._options = options or []
@@ -102,7 +103,7 @@ class HierarchicalOracle(MarkovOracle):
         return high_level_action
         
     def reset(self, ob, info):
-        """Reset the oracle and all options.
+        """Reset the agent and all options.
         
         Args:
             ob: Initial observation

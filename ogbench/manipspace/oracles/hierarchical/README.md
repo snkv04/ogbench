@@ -7,7 +7,7 @@ This module implements a hierarchical RL framework where agents can select eithe
 The hierarchical framework consists of:
 
 1. **Option**: Base class for multi-timestep actions
-2. **HierarchicalOracle**: Base class that can select options or primitive actions
+2. **HierarchicalAgent**: Base class that can select options or primitive actions
 3. **Concrete Options**: Task-specific options (e.g., `MoveToPositionOption`, `GraspOption`)
 4. **Concrete Hierarchical Oracles**: Task-specific high-level policies (e.g., `CubeHierarchicalOracle`)
 
@@ -27,7 +27,7 @@ Main Loop:
     action = agent.select_action(ob, info)
     next_ob, reward, done, info = env.step(action)
     
-HierarchicalOracle.select_action():
+HierarchicalAgent.select_action():
   if active_option exists:
     # Continue executing current option
     action = active_option.select_action(ob, info)
@@ -74,9 +74,9 @@ class MyOption(Option):
 ### 2. Create Hierarchical Oracle
 
 ```python
-from ogbench.manipspace.oracles.hierarchical.hierarchical_oracle import HierarchicalOracle
+from ogbench.manipspace.oracles.hierarchical.hierarchical_agent import HierarchicalAgent
 
-class MyHierarchicalOracle(HierarchicalOracle):
+class MyHierarchicalOracle(HierarchicalAgent):
     def select_high_level_action(self, ob, info):
         # High-level policy: select option or primitive action
         if should_use_option:
@@ -110,13 +110,13 @@ while not done:
 To use with learned hierarchical RL:
 
 1. **High-level policy**: Replace `select_high_level_action()` with a learned policy network
-2. **Intra-option policies**: Can be learned or use existing oracles (like `MarkovOracle`)
+2. **Intra-option policies**: Can be learned or use existing agents (like `MarkovAgent`)
 3. **Option discovery**: Learn which options are useful for the task
 
 Example with learned high-level policy:
 
 ```python
-class LearnedHierarchicalOracle(HierarchicalOracle):
+class LearnedHierarchicalOracle(HierarchicalAgent):
     def __init__(self, high_level_policy, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._high_level_policy = high_level_policy
@@ -136,7 +136,7 @@ class LearnedHierarchicalOracle(HierarchicalOracle):
 ## Files
 
 - `option.py`: Base Option class
-- `hierarchical_oracle.py`: Base HierarchicalOracle class
+- `hierarchical_agent.py`: Base HierarchicalAgent class
 - `cube_options.py`: Example options for cube manipulation
 - `cube_hierarchical.py`: Example hierarchical oracle for cube task
 - `generate_manipspace_hierarchical.py`: Example execution script

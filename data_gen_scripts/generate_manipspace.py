@@ -29,7 +29,7 @@ flags.DEFINE_string('save_path', None, 'Save path.')
 flags.DEFINE_bool('save_first_episode_video', False, 'If true, save a video of the first episode.')
 flags.DEFINE_float('noise', 0.1, 'Action noise level.')
 flags.DEFINE_float('noise_smoothing', 0.5, 'Action noise smoothing level for PlanOracle.')
-flags.DEFINE_float('min_norm', 0.4, 'Minimum action norm for MarkovOracle.')
+flags.DEFINE_float('min_norm', 0.4, 'Minimum action norm for MarkovAgent.')
 flags.DEFINE_float('p_random_action', 0, 'Probability of selecting a random action.')
 flags.DEFINE_integer('num_episodes', 1000, 'Number of episodes.')
 flags.DEFINE_integer('max_episode_steps', 1001, 'Number of episodes.')
@@ -56,8 +56,8 @@ def render_frame_realtime(env, window_name):
 
 def main(_):
     assert FLAGS.dataset_type in ['play', 'noisy']
-    # 'play': Use a non-Markovian oracle (PlanOracle) that follows a pre-computed plan.
-    # 'noisy': Use a Markovian, closed-loop oracle (MarkovOracle) with Gaussian action noise.
+    # 'play': Use a non-Markovian oracle (an instance of PlanAgent) that follows a pre-computed plan.
+    # 'noisy': Use a Markovian, closed-loop oracle (an instance of MarkovAgent) with Gaussian action noise.
 
     # Set default save_path based on env_name and dataset_type if not provided.
     if FLAGS.save_path is None:

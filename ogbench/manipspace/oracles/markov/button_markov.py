@@ -1,9 +1,9 @@
 import numpy as np
 
-from ogbench.manipspace.oracles.markov.markov_oracle import MarkovOracle
+from ogbench.manipspace.oracles.markov.markov_agent import MarkovAgent
 
 
-class ButtonMarkovOracle(MarkovOracle):
+class ButtonMarkovOracle(MarkovAgent):
     def __init__(self, max_step=100, gripper_always_closed=False, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._max_step = max_step

@@ -6,15 +6,17 @@ from scipy.ndimage import gaussian_filter1d
 from ogbench.manipspace import lie
 
 
-class PlanOracle:
-    """Non-Markovian oracle that follows a pre-computed plan.
+class PlanAgent:
+    """Base class for non-Markovian agents that follow pre-computed plans.
 
-    It first generates a plan by interpolating the keyframes of the task and adds temporally correlated noise. Then, it
-    computes the actions by computing the difference between the current state and the next state in the plan.
+    This agent generates a plan by interpolating keyframes and adds temporally 
+    correlated noise. Actions are computed as the difference between the current 
+    state and the next state in the plan. This class can be subclassed to create 
+    either rule-based oracles or learned plan-following policies.
     """
 
     def __init__(self, env, segment_dt=0.4, noise=0.1, noise_smoothing=0.5):
-        """Initialize the oracle.
+        """Initialize the agent.
 
         Args:
             env: Environment.
@@ -108,7 +110,7 @@ class PlanOracle:
         return self._done
 
     def reset(self, ob, info):
-        # logging.info('called PlanOracle.reset()')
+        # logging.info('called PlanAgent.reset()')
         pass
 
     def select_action(self, ob, info):

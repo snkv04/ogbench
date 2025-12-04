@@ -1,5 +1,5 @@
 from ogbench.manipspace.oracles.hierarchical.option import Option
-from ogbench.manipspace.oracles.hierarchical.hierarchical_oracle import HierarchicalOracle
+from ogbench.manipspace.oracles.hierarchical.hierarchical_agent import HierarchicalAgent
 
-__all__ = ['Option', 'HierarchicalOracle']
+__all__ = ['Option', 'HierarchicalAgent']
 

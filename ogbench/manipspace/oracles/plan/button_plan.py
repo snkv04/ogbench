@@ -1,9 +1,9 @@
 import numpy as np
 
-from ogbench.manipspace.oracles.plan.plan_oracle import PlanOracle
+from ogbench.manipspace.oracles.plan.plan_agent import PlanAgent
 
 
-class ButtonPlanOracle(PlanOracle):
+class ButtonPlanOracle(PlanAgent):
     def __init__(self, gripper_always_closed=False, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._gripper_always_closed = gripper_always_closed
