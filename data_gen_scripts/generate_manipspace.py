@@ -32,7 +32,7 @@ flags.DEFINE_float('noise_smoothing', 0.5, 'Action noise smoothing level for Pla
 flags.DEFINE_float('min_norm', 0.4, 'Minimum action norm for MarkovAgent.')
 flags.DEFINE_float('p_random_action', 0, 'Probability of selecting a random action.')
 flags.DEFINE_integer('num_episodes', 1000, 'Number of episodes.')
-flags.DEFINE_integer('max_episode_steps', 1001, 'Number of episodes.')
+flags.DEFINE_integer('max_episode_steps', 1001, 'Maximum number of steps per episode.')
 flags.DEFINE_bool('hierarchical', False, 'If true and dataset_type is noisy, use hierarchical oracle for cube tasks.')
 flags.DEFINE_bool('render_realtime', False, 'If true, render all frames in a separate window in real-time.')
 flags.DEFINE_float('render_delay', 0.05, 'Delay between frames in seconds when rendering in real-time.')

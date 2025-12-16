@@ -16,16 +16,11 @@ import torch.nn as nn
 import torch.optim as optim
 import tqdm
 import tyro
-from torch.distributions.categorical import Categorical
 
 import ogbench.manipspace  # Register environments
-from ogbench.manipspace.oracles.hierarchical.hierarchical_agent import HierarchicalAgent
-from ogbench.manipspace.oracles.hierarchical.cube_options import (
-    MoveToPositionOption,
-    GraspOption,
-    ReleaseOption,
-    LiftVerticallyOption,
-    NoOpOption,
+from ogbench.manipspace.oracles.hierarchical.learned_hierarchical_agent import (
+    PolicyNetwork,
+    LearnedHierarchicalAgent,
 )
 
 torch.set_float32_matmul_precision("high")
@@ -68,150 +63,6 @@ class Args:
     batch_size: int = 0
     minibatch_size: int = 0
     num_iterations: int = 0
-
-
-def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
-    torch.nn.init.orthogonal_(layer.weight, std)
-    torch.nn.init.constant_(layer.bias, bias_const)
-    return layer
-
-
-class PolicyNetwork(nn.Module):
-    """Actor-critic network for high-level option selection."""
-
-    def __init__(self, obs_dim: int, num_actions: int, hidden_dim: int = 256, device=None):
-        super().__init__()
-        self.network = nn.Sequential(
-            layer_init(nn.Linear(obs_dim, hidden_dim, device=device)),
-            nn.Tanh(),
-            layer_init(nn.Linear(hidden_dim, hidden_dim, device=device)),
-            nn.Tanh(),
-        )
-        self.actor = layer_init(nn.Linear(hidden_dim, num_actions, device=device), std=0.01)
-        self.critic = layer_init(nn.Linear(hidden_dim, 1, device=device), std=1.0)
-
-    def get_value(self, obs):
-        return self.critic(self.network(obs))
-
-    def get_action_and_value(self, obs, action=None):
-        hidden = self.network(obs)
-        logits = self.actor(hidden)
-        probs = Categorical(logits=logits)
-        if action is None:
-            action = probs.sample()
-        return action, probs.log_prob(action), probs.entropy(), self.critic(hidden)
-
-
-class LearnedHierarchicalAgent(HierarchicalAgent):
-    """Hierarchical agent with a learned high-level policy for option selection."""
-
-    NUM_OPTIONS = 10
-    OBS_DIM = 14  # effector(3) + yaw(1) + gripper(2) + block(4) + target(4)
-
-    def __init__(self, env, policy_network: PolicyNetwork, device: torch.device):
-        super().__init__(options=[], env=env)
-        self.policy_network = policy_network
-        self.device = device
-        self._target_block = None
-        self._final_pos = None
-        self._final_yaw = None
-        self.last_decision = None  # Stores {obs, action, logprob, value} for PPO
-
-    def reset(self, ob, info):
-        super().reset(ob, info)
-        self._target_block = info['privileged/target_block']
-        self._final_pos = np.random.uniform(*self._env.unwrapped._arm_sampling_bounds)
-        self._final_yaw = np.random.uniform(-np.pi, np.pi)
-        self._options = self._create_options()
-        self.last_decision = None
-
-    def _create_options(self) -> List:
-        """Create the set of options for cube manipulation."""
-        env = self._env
-        target_block = self._target_block
-        final_pos = self._final_pos
-        final_yaw = self._final_yaw
-
-        def block_above_pos(ob, info):
-            return info[f'privileged/block_{target_block}_pos'] + np.array([0, 0, 0.18])
-
-        def block_yaw(ob, info):
-            effector_yaw = info['proprio/effector_yaw'][0]
-            block_yaw_val = info[f'privileged/block_{target_block}_yaw'][0]
-            return self._shortest_yaw(effector_yaw, block_yaw_val)
-
-        def block_pos(ob, info):
-            return info[f'privileged/block_{target_block}_pos']
-
-        def target_above_pos(ob, info):
-            return info['privileged/target_block_pos'] + np.array([0, 0, 0.18])
-
-        def target_yaw(ob, info):
-            effector_yaw = info['proprio/effector_yaw'][0]
-            target_yaw_val = info['privileged/target_block_yaw'][0]
-            return self._shortest_yaw(effector_yaw, target_yaw_val)
-
-        def target_pos(ob, info):
-            return info['privileged/target_block_pos']
-
-        def get_final_pos(ob, info):
-            return final_pos
-
-        def get_final_yaw(ob, info):
-            return final_yaw
-
-        return [
-            NoOpOption('no_op', env, duration=10),
-            MoveToPositionOption('move_above_block', env, block_above_pos, block_yaw, gripper_state=-1, min_norm=self._min_norm),
-            MoveToPositionOption('move_to_block', env, block_pos, block_yaw, gripper_state=-1, min_norm=self._min_norm),
-            GraspOption('grasp_block', env, block_pos, block_yaw, min_norm=self._min_norm),
-            LiftVerticallyOption('lift_after_grasp', env, block_pos, target_height=0.36, target_yaw_fn=target_yaw, gripper_state=1, min_norm=self._min_norm),
-            MoveToPositionOption('move_above_target', env, target_above_pos, target_yaw, gripper_state=1, min_norm=self._min_norm),
-            MoveToPositionOption('move_to_target', env, target_pos, target_yaw, gripper_state=1, min_norm=self._min_norm),
-            ReleaseOption('release', env),
-            LiftVerticallyOption('lift_after_release', env, block_pos, target_height=0.32, target_yaw_fn=get_final_yaw, gripper_state=-1, min_norm=self._min_norm),
-            MoveToPositionOption('move_to_final', env, get_final_pos, get_final_yaw, gripper_state=-1, min_norm=self._min_norm),
-        ]
-
-    @staticmethod
-    def _shortest_yaw(current_yaw: float, target_yaw: float) -> float:
-        diff = target_yaw - current_yaw
-        while diff > np.pi:
-            diff -= 2 * np.pi
-        while diff < -np.pi:
-            diff += 2 * np.pi
-        return current_yaw + diff
-
-    def get_obs_tensor(self, info) -> torch.Tensor:
-        """Extract observation features for the high-level policy."""
-        features = np.concatenate([
-            info['proprio/effector_pos'],
-            np.atleast_1d(info['proprio/effector_yaw']),
-            np.atleast_1d(info['proprio/gripper_opening']),
-            np.atleast_1d(info['proprio/gripper_contact']),
-            info[f'privileged/block_{self._target_block}_pos'],
-            np.atleast_1d(info[f'privileged/block_{self._target_block}_yaw']),
-            info['privileged/target_block_pos'],
-            np.atleast_1d(info['privileged/target_block_yaw']),
-        ])
-        return torch.as_tensor(features, dtype=torch.float32, device=self.device)
-
-    def select_high_level_action(self, ob, info):
-        """Select option using the learned policy network."""
-        obs_tensor = self.get_obs_tensor(info).unsqueeze(0)
-        with torch.no_grad():
-            action, logprob, _, value = self.policy_network.get_action_and_value(obs_tensor)
-
-        # Store decision for PPO to collect
-        self.last_decision = {
-            'obs': obs_tensor.squeeze(0),
-            'action': action,
-            'logprob': logprob,
-            'value': value.flatten(),
-        }
-
-        option_idx = min(action.item(), len(self._options) - 1)
-        return self._options[option_idx]
 
 
 def rollout(
