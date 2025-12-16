@@ -2,6 +2,7 @@ import json
 import os
 import random
 import time
+from datetime import datetime
 # from absl import logging
 # logging.set_verbosity(logging.INFO)
 from collections import deque
@@ -32,8 +33,7 @@ torch.set_float32_matmul_precision("high")
 
 @dataclass
 class Args:
-    exp_name: str = os.path.basename(__file__)[: -len(".py")]
-    seed: int = 1
+    seed: int = 1048596
     torch_deterministic: bool = True
     cuda: bool = True
     track_with_wandb: bool = False
@@ -440,7 +440,8 @@ if __name__ == "__main__":
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     args.num_iterations = args.total_timesteps // args.batch_size
-    run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_name = f"{args.env_id}__{args.seed}__{timestamp}"
     assert args.batch_size % args.num_minibatches == 0, "Batch size must be divisible by num_minibatches"
     # if args.batch_size % args.num_minibatches != 0:
     #     print(f"WARNING: batch_size ({args.batch_size}) is not divisible by num_minibatches ({args.num_minibatches}). "
@@ -467,7 +468,7 @@ if __name__ == "__main__":
     os.makedirs(save_path, exist_ok=True)
     print(f"Saving to: {save_path}")
 
-    # Seeding
+    # TRY NOT TO MODIFY: Seeding
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
