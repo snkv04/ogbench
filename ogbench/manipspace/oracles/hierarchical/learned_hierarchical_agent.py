@@ -113,12 +113,27 @@ class LearnedHierarchicalAgent(HierarchicalAgent):
         
         Args:
             ob: Initial observation
-            info: Info dict from environment (must contain 'privileged/target_block')
+            info: Info dict from environment
         """
         super().reset(ob, info)
         self._done = False  # Reset done flag for new task
-        self._target_block = info['privileged/target_block']
-        self._final_pos = np.random.uniform(*self._env.unwrapped._arm_sampling_bounds)
+        
+        env = self._env.unwrapped
+        
+        # Handle both data_collection and task modes
+        if env._mode == 'data_collection':
+            # In data_collection mode, target info is in privileged keys
+            self._target_block = info['privileged/target_block']
+            self._target_pos = info['privileged/target_block_pos'].copy()
+            self._target_yaw = info['privileged/target_block_yaw'][0]
+        else:
+            # In task mode, target info is in cur_task_info
+            # For cube-single, there's only 1 cube, so target_block = 0
+            self._target_block = 0
+            self._target_pos = env.cur_task_info['goal_xyzs'][self._target_block].copy()
+            self._target_yaw = 0.0  # Task mode uses identity orientation for goals
+        
+        self._final_pos = np.random.uniform(*env._arm_sampling_bounds)
         self._final_yaw = np.random.uniform(-np.pi, np.pi)
         self._options = self._create_options()
         self.last_decision = None
@@ -155,16 +170,19 @@ class LearnedHierarchicalAgent(HierarchicalAgent):
         def block_pos(ob, info):
             return info[f'privileged/block_{target_block}_pos']
 
+        # Use stored target info (works for both data_collection and task modes)
+        stored_target_pos = self._target_pos
+        stored_target_yaw = self._target_yaw
+
         def target_above_pos(ob, info):
-            return info['privileged/target_block_pos'] + np.array([0, 0, 0.18])
+            return stored_target_pos + np.array([0, 0, 0.18])
 
         def target_yaw(ob, info):
             effector_yaw = info['proprio/effector_yaw'][0]
-            target_yaw_val = info['privileged/target_block_yaw'][0]
-            return self._shortest_yaw(effector_yaw, target_yaw_val)
+            return self._shortest_yaw(effector_yaw, stored_target_yaw)
 
         def target_pos(ob, info):
-            return info['privileged/target_block_pos']
+            return stored_target_pos
 
         def get_final_pos(ob, info):
             return final_pos
@@ -212,6 +230,7 @@ class LearnedHierarchicalAgent(HierarchicalAgent):
                 - target_pos (3)
                 - target_yaw (1)
         """
+        # Use stored target info (works for both data_collection and task modes)
         features = np.concatenate([
             info['proprio/effector_pos'],
             np.atleast_1d(info['proprio/effector_yaw']),
@@ -219,8 +238,8 @@ class LearnedHierarchicalAgent(HierarchicalAgent):
             np.atleast_1d(info['proprio/gripper_contact']),
             info[f'privileged/block_{self._target_block}_pos'],
             np.atleast_1d(info[f'privileged/block_{self._target_block}_yaw']),
-            info['privileged/target_block_pos'],
-            np.atleast_1d(info['privileged/target_block_yaw']),
+            self._target_pos,
+            np.atleast_1d(self._target_yaw),
         ])
         return torch.as_tensor(features, dtype=torch.float32, device=self.device)
 
@@ -241,8 +260,7 @@ class LearnedHierarchicalAgent(HierarchicalAgent):
         # Check if task is complete (cube aligned with target)
         # Using 4cm threshold, same as environment's success threshold
         block_pos = info[f'privileged/block_{self._target_block}_pos']
-        target_pos = info['privileged/target_block_pos']
-        target_aligned = np.linalg.norm(target_pos - block_pos) <= 0.04
+        target_aligned = np.linalg.norm(self._target_pos - block_pos) <= 0.04
         if target_aligned:
             self._done = True
         

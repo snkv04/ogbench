@@ -30,6 +30,8 @@ class Args:
     # Environment
     env_name: str = "cube-single-v0"
     seed: int = 0
+    task_id: Optional[int] = None  # Task ID (1-5 for cube-single). None = sample randomly
+    terminate_at_goal: bool = False  # End episode when goal reached
     
     # Dataset generation
     num_episodes: int = 1000
@@ -70,7 +72,8 @@ def main():
     if args.save_path is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         policy_type = "deterministic" if args.deterministic else f"temp{args.temperature}"
-        args.save_path = f".ogbench/data/{args.env_name}-learned-{policy_type}-{timestamp}.npz"
+        task_str = f"task{args.task_id}" if args.task_id else "alltasks"
+        args.save_path = f".ogbench/data/{args.env_name}-{task_str}-{policy_type}-{timestamp}.npz"
     
     # Device
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
@@ -81,13 +84,21 @@ def main():
     checkpoint = torch.load(args.checkpoint_path, map_location=device, weights_only=False)
     print(f"Checkpoint trained for {checkpoint['iteration']} iterations, {checkpoint['global_step']} steps")
     
-    # Initialize environment
+    # Initialize environment in task mode
+    # task_id=None means sample from all tasks, task_id=1-5 means use that specific task
     env = gymnasium.make(
         args.env_name,
-        terminate_at_goal=False,
-        mode='data_collection',
+        terminate_at_goal=args.terminate_at_goal,
+        mode='task',
+        reward_task_id=args.task_id,  # None = sample, 1-5 = specific task
         max_episode_steps=args.max_episode_steps,
     )
+    
+    # Print task info
+    if args.task_id:
+        print(f"Using fixed task: task{args.task_id}")
+    else:
+        print(f"Sampling from all {len(env.unwrapped.task_infos)} tasks")
     
     # Initialize policy network
     policy_network = PolicyNetwork(
@@ -117,9 +128,12 @@ def main():
     num_train_episodes = args.num_episodes
     num_val_episodes = args.num_episodes // 10
     
-    tasks_completed = 0  # Number of tasks where cube reached target
-    tasks_attempted = 0  # Total tasks attempted (1 per episode start + 1 per set_new_target)
-    episodes_with_success = 0  # Episodes where at least one task was completed
+    # Task mode statistics
+    episodes_succeeded = 0  # Episodes where at least one task succeeded
+    episodes_failed = 0  # Episodes with no successes
+    tasks_completed = 0  # Total tasks completed across all episodes
+    tasks_attempted = 0  # Total tasks attempted across all episodes
+    per_task_stats = defaultdict(lambda: {'attempted': 0, 'succeeded': 0})
     
     # Initialize window for real-time rendering if enabled
     window_name = 'Learned Policy - Real-time Rendering'
@@ -129,12 +143,20 @@ def main():
     
     print(f"\nGenerating {num_train_episodes + num_val_episodes} episodes...")
     print(f"  Train: {num_train_episodes}, Val: {num_val_episodes}")
+    print(f"  Mode: task, terminate_at_goal: {args.terminate_at_goal}")
     print(f"  Deterministic: {args.deterministic}, Temperature: {args.temperature}")
     print(f"  Action noise: {args.noise}")
     
     for ep_idx in trange(num_train_episodes + num_val_episodes):
         ob, info = env.reset()
         agent.reset(ob, info)
+        
+        # Get current task info
+        task_id = env.unwrapped.cur_task_id
+        task_name = env.unwrapped.cur_task_info['task_name']
+        per_task_stats[task_id]['attempted'] += 1
+        tasks_attempted += 1  # Each episode starts with one task
+        episode_had_success = False
         
         if ep_idx == 0 and args.save_first_episode_video:
             episode_frames = [env.render()]
@@ -147,13 +169,10 @@ def main():
         
         done = False
         step = 0
-        episode_had_success = False
-        tasks_attempted += 1  # Each episode starts with one task
         
         while not done:
             # Get action from learned policy (via hierarchical agent)
             action = agent.select_action(ob, info)
-            print(f"active option = {agent.active_option.name if agent.active_option is not None else 'none'}")
             action = np.array(action)
             
             # Add optional noise
@@ -180,20 +199,24 @@ def main():
             
             # Handle task completion (agent.done means task was successful)
             # Success = cube is within 4cm of target position
-            # block_pos = info[f'privileged/block_{agent._target_block}_pos']
-            # target_pos = info['privileged/target_block_pos']
-            # dist = np.linalg.norm(target_pos - block_pos)
-            # print(f"Step {step}: cube-target dist = {dist:.4f}m, done = {agent.done}")
+            did_reset = False
             if agent.done:
                 tasks_completed += 1
+                per_task_stats[task_id]['succeeded'] += 1
                 episode_had_success = True
                 
                 # Set new target for next task within same episode
-                agent_ob, agent_info = env.unwrapped.set_new_target(p_stack=0.0)
-                agent.reset(agent_ob, agent_info)
+                new_task_id = np.random.randint(1, len(env.unwrapped.task_infos) + 1)
+                while new_task_id == task_id:
+                    new_task_id = np.random.randint(1, len(env.unwrapped.task_infos) + 1)
+                ob, info = env.reset(options={'task_id': new_task_id})
+                agent.reset(ob, info)
+                task_id = new_task_id  # Update current task_id
+                per_task_stats[task_id]['attempted'] += 1
                 tasks_attempted += 1  # New task started
                 option_terminated = True
                 prev_option_terminated = True
+                did_reset = True
             
             # Store data
             dataset['option_indices'].append(option_idx)
@@ -205,6 +228,7 @@ def main():
             dataset['terminals'].append(done)
             dataset['qpos'].append(info['prev_qpos'])
             dataset['qvel'].append(info['prev_qvel'])
+            dataset['task_ids'].append(task_id)
             
             if ep_idx == 0 and args.save_first_episode_video:
                 episode_frames.append(env.render())
@@ -212,13 +236,19 @@ def main():
             if args.render_realtime:
                 render_frame_realtime(env, window_name, args.render_delay)
             
-            ob = next_ob
+            # Only update ob from step result if we didn't reset
+            if not did_reset:
+                ob = next_ob
             step += 1
         
-        total_steps += step
+        # Track episode outcome
+        # episodes_succeeded = episodes with at least one task completed
         if episode_had_success:
-            episodes_with_success += 1
+            episodes_succeeded += 1
+        else:
+            episodes_failed += 1
         
+        total_steps += step
         if ep_idx < num_train_episodes:
             total_train_steps += step
         
@@ -243,10 +273,17 @@ def main():
     total_episodes = num_train_episodes + num_val_episodes
     print(f'\n=== Statistics ===')
     print(f'Total steps: {total_steps}')
+    print(f'Total episodes: {total_episodes}')
     print(f'Task success rate: {tasks_completed}/{tasks_attempted} ({100*tasks_completed/tasks_attempted:.1f}%)')
-    print(f'  - Tasks completed: {tasks_completed} (cube placed within 4cm of target)')
-    print(f'  - Tasks attempted: {tasks_attempted} (includes new targets after each success)')
-    print(f'Episodes with at least one success: {episodes_with_success}/{total_episodes} ({100*episodes_with_success/total_episodes:.1f}%)')
+    print(f'Episodes with at least one success: {episodes_succeeded}/{total_episodes} ({100*episodes_succeeded/total_episodes:.1f}%)')
+    
+    # Per-task breakdown
+    print(f'\nPer-task success rates:')
+    for task_id in sorted(per_task_stats.keys()):
+        stats = per_task_stats[task_id]
+        task_name = env.unwrapped.task_infos[task_id - 1]['task_name']
+        rate = 100 * stats['succeeded'] / stats['attempted'] if stats['attempted'] > 0 else 0
+        print(f'  Task {task_id} ({task_name}): {stats["succeeded"]}/{stats["attempted"]} ({rate:.1f}%)')
     
     # Save dataset
     train_path = args.save_path.replace('.npz', '-train.npz')
@@ -261,7 +298,7 @@ def main():
             dtype = np.uint8
         elif k == 'terminals':
             dtype = bool
-        elif k == 'option_indices':
+        elif k in ['option_indices', 'task_ids']:
             dtype = np.int32
         elif k == 'option_names':
             dtype = object
