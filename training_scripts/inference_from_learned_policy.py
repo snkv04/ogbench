@@ -180,6 +180,10 @@ def main():
             
             # Handle task completion (agent.done means task was successful)
             # Success = cube is within 4cm of target position
+            # block_pos = info[f'privileged/block_{agent._target_block}_pos']
+            # target_pos = info['privileged/target_block_pos']
+            # dist = np.linalg.norm(target_pos - block_pos)
+            # print(f"Step {step}: cube-target dist = {dist:.4f}m, done = {agent.done}")
             if agent.done:
                 tasks_completed += 1
                 episode_had_success = True

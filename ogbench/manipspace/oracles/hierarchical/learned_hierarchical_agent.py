@@ -116,6 +116,7 @@ class LearnedHierarchicalAgent(HierarchicalAgent):
             info: Info dict from environment (must contain 'privileged/target_block')
         """
         super().reset(ob, info)
+        self._done = False  # Reset done flag for new task
         self._target_block = info['privileged/target_block']
         self._final_pos = np.random.uniform(*self._env.unwrapped._arm_sampling_bounds)
         self._final_yaw = np.random.uniform(-np.pi, np.pi)
@@ -237,6 +238,14 @@ class LearnedHierarchicalAgent(HierarchicalAgent):
         Returns:
             The selected Option object to execute
         """
+        # Check if task is complete (cube aligned with target)
+        # Using 4cm threshold, same as environment's success threshold
+        block_pos = info[f'privileged/block_{self._target_block}_pos']
+        target_pos = info['privileged/target_block_pos']
+        target_aligned = np.linalg.norm(target_pos - block_pos) <= 0.04
+        if target_aligned:
+            self._done = True
+        
         obs_tensor = self.get_obs_tensor(info).unsqueeze(0)
         with torch.no_grad():
             action, logprob, _, value = self.policy_network.get_action_and_value(
