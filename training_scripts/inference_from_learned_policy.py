@@ -31,7 +31,6 @@ class Args:
     env_name: str = "cube-single-v0"
     seed: int = 0
     task_id: Optional[int] = None  # Task ID (1-5 for cube-single). None = sample randomly
-    terminate_at_goal: bool = False  # End episode when goal reached
     
     # Dataset generation
     num_episodes: int = 1000
@@ -88,7 +87,7 @@ def main():
     # task_id=None means sample from all tasks, task_id=1-5 means use that specific task
     env = gymnasium.make(
         args.env_name,
-        terminate_at_goal=args.terminate_at_goal,
+        terminate_at_goal=False,
         mode='task',
         reward_task_id=args.task_id,  # None = sample, 1-5 = specific task
         max_episode_steps=args.max_episode_steps,
@@ -143,7 +142,6 @@ def main():
     
     print(f"\nGenerating {num_train_episodes + num_val_episodes} episodes...")
     print(f"  Train: {num_train_episodes}, Val: {num_val_episodes}")
-    print(f"  Mode: task, terminate_at_goal: {args.terminate_at_goal}")
     print(f"  Deterministic: {args.deterministic}, Temperature: {args.temperature}")
     print(f"  Action noise: {args.noise}")
     

@@ -53,6 +53,7 @@ class Args:
     vf_coef: float = 0.5
     max_grad_norm: float = 0.5
     target_kl: Optional[float] = None
+    episodes_per_rollout: int = 4
 
     # Saving
     save_dir: str = ".ogbench/ppo_runs"
@@ -63,6 +64,7 @@ class Args:
     batch_size: int = 0
     minibatch_size: int = 0
     num_iterations: int = 0
+    max_episode_steps: int = 0
 
 
 def rollout(
@@ -111,6 +113,7 @@ def rollout(
         agent.active_option.step()  # Increment step counter
         next_ob, reward, terminated, truncated, next_info = env.step(low_level_action)
         done = terminated or truncated
+        assert terminated == False and (truncated == False or step % args.max_episode_steps == args.max_episode_steps - 1), "Episode should last its full length"
 
         # Check if option should terminate
         if agent.active_option.is_terminated(next_ob, next_info):
@@ -271,12 +274,12 @@ def update(
     }
 
 
-def make_env(env_id: str, seed: int):
+def make_env(env_id: str, seed: int, max_episode_steps: int):
     env = gym.make(
         env_id,
         mode='data_collection',
-        terminate_at_goal=True,
-        max_episode_steps=1001,
+        terminate_at_goal=False,
+        max_episode_steps=max_episode_steps,
     )
     env.action_space.seed(seed)
     env.observation_space.seed(seed)
@@ -288,6 +291,13 @@ if __name__ == "__main__":
     assert args.num_envs == 1, "Only one environment is supported for hierarchical PPO at the moment"
 
     # Compute derived values
+    args.max_episode_steps = args.num_steps // args.episodes_per_rollout
+    assert args.max_episode_steps > 0, "Cannot have more episodes than steps in each rollout"
+    if args.num_steps % args.episodes_per_rollout != 0:
+        print(f"WARNING: num_steps ({args.num_steps} steps per rollout) is not divisible by episodes_per_rollout ({args.episodes_per_rollout}). "
+              f"Each rollout will have {args.max_episode_steps * args.episodes_per_rollout} steps instead "
+              f"({(args.num_steps - args.max_episode_steps * args.episodes_per_rollout)} fewer).")
+        args.num_steps = args.max_episode_steps * args.episodes_per_rollout
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     args.num_iterations = args.total_timesteps // args.batch_size
@@ -329,7 +339,7 @@ if __name__ == "__main__":
     print(f"Using device: {device}")
 
     # Environment setup
-    env = make_env(args.env_id, args.seed)
+    env = make_env(args.env_id, args.seed, args.max_episode_steps)
 
     # Policy network (owned by script, shared with agent)
     policy_network = PolicyNetwork(
