@@ -30,7 +30,7 @@ class Args:
     # Environment
     env_name: str = "cube-single-v0"
     seed: int = 0
-    task_id: Optional[int] = None  # Task ID (1-5 for cube-single). None = sample randomly
+    task_id: int = 0  # Fixed task ID for all episodes (0 = default task)
     
     # Dataset generation
     num_episodes: int = 1000
@@ -71,8 +71,7 @@ def main():
     if args.save_path is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         policy_type = "deterministic" if args.deterministic else f"temp{args.temperature}"
-        task_str = f"task{args.task_id}" if args.task_id else "alltasks"
-        args.save_path = f".ogbench/data/{args.env_name}-{task_str}-{policy_type}-{timestamp}.npz"
+        args.save_path = f".ogbench/data/{args.env_name}-task{args.task_id}-{policy_type}-{timestamp}.npz"
     
     # Device
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
@@ -83,21 +82,15 @@ def main():
     checkpoint = torch.load(args.checkpoint_path, map_location=device, weights_only=False)
     print(f"Checkpoint trained for {checkpoint['iteration']} iterations, {checkpoint['global_step']} steps")
     
-    # Initialize environment in task mode
-    # task_id=None means sample from all tasks, task_id=1-5 means use that specific task
+    # Initialize environment in task mode with fixed task
     env = gymnasium.make(
         args.env_name,
         terminate_at_goal=False,
         mode='task',
-        reward_task_id=args.task_id,  # None = sample, 1-5 = specific task
+        reward_task_id=args.task_id,  # Fixed task for all episodes
         max_episode_steps=args.max_episode_steps,
     )
-    
-    # Print task info
-    if args.task_id:
-        print(f"Using fixed task: task{args.task_id}")
-    else:
-        print(f"Sampling from all {len(env.unwrapped.task_infos)} tasks")
+    print(f"Using fixed task_id={args.task_id} for all episodes")
     
     # Initialize policy network
     policy_network = PolicyNetwork(

@@ -37,6 +37,7 @@ class Args:
 
     # Algorithm specific arguments
     env_id: str = "cube-single-v0"
+    task_id: int = 0  # Fixed task ID for all episodes (0 = default task)
     total_timesteps: int = 1000000
     learning_rate: float = 3e-4
     num_envs: int = 1
@@ -112,6 +113,7 @@ def rollout(
         low_level_action = agent.active_option.select_action(ob, info)
         agent.active_option.step()  # Increment step counter
         next_ob, reward, terminated, truncated, next_info = env.step(low_level_action)
+        # print(f"reward = {reward}")
         done = terminated or truncated
         assert terminated == False and (truncated == False or step % args.max_episode_steps == args.max_episode_steps - 1), "Each episode should last its full length"
 
@@ -123,7 +125,9 @@ def rollout(
         episode_return += reward
 
         if done:
-            # print(f"At step {step}, episode is done!")
+            # print(f"\nAt step {step}, episode is done!")
+            # print(f"success = {next_info.get('success', False)}")
+            # print(f"target_pos = {agent._target_pos}, current_block_pos = {next_info[f'privileged/block_{args.task_id}_pos']}")
             
             # Store final transition for this episode
             if current_hl_info is not None:
@@ -146,6 +150,7 @@ def rollout(
             # Reset environment and agent
             ob, info = env.reset()
             agent.reset(ob, info)
+            # print(f"env just resetted, target_pos = {agent._target_pos}, initial_block_pos = {info[f'privileged/block_{args.task_id}_pos']}")
         else:
             ob, info = next_ob, next_info
 
@@ -274,12 +279,13 @@ def update(
     }
 
 
-def make_env(env_id: str, seed: int, max_episode_steps: int):
+def make_env(env_id: str, seed: int, max_episode_steps: int, task_id: int):
     env = gym.make(
         env_id,
-        mode='data_collection',
+        mode='task',
         terminate_at_goal=False,
         max_episode_steps=max_episode_steps,
+        reward_task_id=task_id,  # Fixed task for all episodes
     )
     env.action_space.seed(seed)
     env.observation_space.seed(seed)
@@ -339,7 +345,8 @@ if __name__ == "__main__":
     print(f"Using device: {device}")
 
     # Environment setup
-    env = make_env(args.env_id, args.seed, args.max_episode_steps)
+    env = make_env(args.env_id, args.seed, args.max_episode_steps, args.task_id)
+    print(f"Using fixed task_id={args.task_id} for all episodes")
 
     # Policy network (owned by script, shared with agent)
     policy_network = PolicyNetwork(
