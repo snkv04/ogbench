@@ -1,15 +1,13 @@
 """Run inference, and generate a dataset, using a trained hierarchical PPO policy."""
 
 import pathlib
-import time
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 
-import cv2
-import gymnasium
 import imageio.v2 as imageio
+import gymnasium
 import numpy as np
 import torch
 import tyro
@@ -20,6 +18,12 @@ from ogbench.manipspace.oracles.hierarchical.learned_hierarchical_agent import (
     PolicyNetwork,
     LearnedHierarchicalAgent,
 )
+from training_scripts.train_ppo_cube_hierarchical import (
+    render_frame_realtime,
+    init_realtime_rendering,
+    cleanup_realtime_rendering,
+    add_text_overlay,
+)
 
 
 @dataclass
@@ -29,7 +33,7 @@ class Args:
     
     # Environment
     env_name: str = "cube-single-v0"
-    seed: int = 0
+    seed: int = 1048596
     task_id: int = 0  # Fixed task ID for all episodes (0 = default task)
     
     # Dataset generation
@@ -53,13 +57,42 @@ class Args:
     cuda: bool = True
 
 
-def render_frame_realtime(env, window_name, delay):
-    """Render a frame in real-time."""
-    frame = env.render()
-    frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-    cv2.imshow(window_name, frame_bgr)
-    cv2.waitKey(1)
-    time.sleep(delay)
+def save_episode_video(
+    frames: List[np.ndarray],
+    save_dir: str,
+    filename: str,
+    fps: int = 30,
+) -> str:
+    """Save episode frames as a video file.
+    
+    Args:
+        frames: List of RGB frames (numpy arrays).
+        save_dir: Directory to save the video in.
+        filename: Name of the video file (without extension).
+        fps: Frames per second.
+    
+    Returns:
+        Full path to the saved video.
+    """
+    if not frames:
+        return ""
+    
+    save_path = pathlib.Path(save_dir)
+    save_path.mkdir(parents=True, exist_ok=True)
+    video_path = save_path / f"{filename}.mp4"
+    
+    with imageio.get_writer(
+        video_path.as_posix(),
+        fps=fps,
+        codec='libx264',
+        quality=8,
+        macro_block_size=None,
+    ) as writer:
+        for frame in frames:
+            writer.append_data(frame)
+    
+    print(f"Saved video to: {video_path.as_posix()}")
+    return video_path.as_posix()
 
 
 def main():
@@ -128,8 +161,7 @@ def main():
     # Initialize window for real-time rendering if enabled
     window_name = 'Learned Policy - Real-time Rendering'
     if args.render_realtime:
-        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(window_name, 800, 600)
+        init_realtime_rendering(window_name)
     
     print(f"\nGenerating {num_train_episodes + num_val_episodes} episodes...")
     print(f"  Train: {num_train_episodes}, Val: {num_val_episodes}")
@@ -147,14 +179,18 @@ def main():
         tasks_attempted += 1  # Each episode starts with one task
         episode_had_success = False
         
-        if ep_idx == 0 and args.save_first_episode_video:
-            episode_frames = [env.render()]
-        
-        if args.render_realtime:
-            render_frame_realtime(env, window_name, args.render_delay)
-        
         # Track option state
         prev_option_terminated = True
+        current_option_idx = None
+        current_option_name = None
+        
+        if ep_idx == 0 and args.save_first_episode_video:
+            frame = add_text_overlay(env.render(), current_option_idx, current_option_name)
+            episode_frames = [frame]
+        
+        if args.render_realtime:
+            render_frame_realtime(env, window_name, args.render_delay, 
+                                  current_option_idx, current_option_name)
         
         done = False
         step = 0
@@ -180,11 +216,15 @@ def main():
                 option_initiated = prev_option_terminated
                 option_terminated = not current_active_option.active
                 prev_option_terminated = option_terminated
+                current_option_idx = option_idx
+                current_option_name = option_name
             else:
                 option_idx = -1
                 option_name = "none"
                 option_initiated = False
                 option_terminated = False
+                current_option_idx = None
+                current_option_name = None
             
             # Handle task completion (agent.done means task was successful)
             # Success = cube is within 4cm of target position
@@ -209,10 +249,12 @@ def main():
             dataset['task_ids'].append(task_id)
             
             if ep_idx == 0 and args.save_first_episode_video:
-                episode_frames.append(env.render())
+                frame = add_text_overlay(env.render(), current_option_idx, current_option_name)
+                episode_frames.append(frame)
             
             if args.render_realtime:
-                render_frame_realtime(env, window_name, args.render_delay)
+                render_frame_realtime(env, window_name, args.render_delay,
+                                      current_option_idx, current_option_name)
             
             ob = next_ob
             step += 1
@@ -226,18 +268,12 @@ def main():
         if (args.save_first_episode_video and args.save_path is not None 
             and ep_idx == 0 and episode_frames):
             save_base = pathlib.Path(args.save_path)
-            video_path = save_base.parent / f'{save_base.stem}_episode0.mp4'
-            video_path.parent.mkdir(parents=True, exist_ok=True)
-            with imageio.get_writer(
-                video_path.as_posix(),
+            save_episode_video(
+                episode_frames,
+                save_dir=save_base.parent.as_posix(),
+                filename=f"inference_{save_base.stem}_first_episode",
                 fps=30,
-                codec='libx264',
-                quality=8,
-                macro_block_size=None,
-            ) as writer:
-                for frame in episode_frames:
-                    writer.append_data(frame)
-            print(f'\nSaved video of first episode to: {video_path.as_posix()}')
+            )
     
     # Print statistics
     total_episodes = num_train_episodes + num_val_episodes
@@ -285,7 +321,7 @@ def main():
     # Cleanup
     env.close()
     if args.render_realtime:
-        cv2.destroyAllWindows()
+        cleanup_realtime_rendering()
 
 
 if __name__ == '__main__':

@@ -9,6 +9,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
+import cv2
 import gymnasium as gym
 import numpy as np
 import torch
@@ -61,11 +62,98 @@ class Args:
     checkpoint_freq: int = 100
     save_model: bool = True
 
+    # Visualization
+    render_realtime: bool = False
+    render_delay: float = 0.001
+
     # Computed at runtime
     batch_size: int = 0
     minibatch_size: int = 0
     num_iterations: int = 0
     max_episode_steps: int = 0
+
+
+def add_text_overlay(
+    frame: np.ndarray,
+    option_idx: Optional[int] = None,
+    option_text: Optional[str] = None,
+    font_scale: float = 0.5,
+    thickness: int = 2,
+) -> np.ndarray:
+    """Add HRL option info as text overlay on frame.
+    
+    Args:
+        frame: RGB frame (numpy array).
+        option_idx: Option index to display.
+        option_text: Option name/description to display.
+        font_scale: Font scale for text.
+        thickness: Thickness of text.
+    
+    Returns:
+        Frame with text overlay (copy of original).
+    """
+    if option_idx is None and option_text is None:
+        return frame
+    
+    frame = frame.copy()  # Don't modify original
+    
+    # Build text string
+    if option_idx is not None and option_text is not None:
+        text = f"Option {option_idx}: {option_text}"
+    elif option_idx is not None:
+        text = f"Option {option_idx}"
+    else:
+        text = option_text
+    
+    # Draw text with black outline for visibility
+    position = (10, 30)
+    cv2.putText(frame, text, position, cv2.FONT_HERSHEY_SIMPLEX, 
+                font_scale, (0, 0, 0), thickness + 2)  # Black outline
+    cv2.putText(frame, text, position, cv2.FONT_HERSHEY_SIMPLEX,
+                font_scale, (255, 255, 255), thickness)  # White text
+    
+    return frame
+
+
+def render_frame_realtime(
+    env,
+    window_name: str,
+    delay: float,
+    option_idx: Optional[int] = None,
+    option_text: Optional[str] = None,
+):
+    """Render a frame in real-time using OpenCV.
+    
+    Args:
+        env: The gymnasium environment.
+        window_name: Name of the OpenCV window.
+        delay: Time to sleep after rendering (seconds).
+        option_idx: Optional option index to display as overlay.
+        option_text: Optional option name to display as overlay.
+    """
+    frame = env.render()
+    frame = add_text_overlay(frame, option_idx, option_text)
+    frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+    cv2.imshow(window_name, frame_bgr)
+    cv2.waitKey(1)
+    time.sleep(delay)
+
+
+def init_realtime_rendering(window_name: str, width: int = 2000, height: int = 2000):
+    """Initialize OpenCV window for real-time rendering.
+    
+    Args:
+        window_name: Name of the OpenCV window.
+        width: Window width in pixels.
+        height: Window height in pixels.
+    """
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(window_name, width, height)
+
+
+def cleanup_realtime_rendering():
+    """Cleanup OpenCV windows."""
+    cv2.destroyAllWindows()
 
 
 def rollout(
@@ -74,6 +162,9 @@ def rollout(
     ob,
     info,
     num_steps: int,
+    render_realtime: bool = False,
+    render_window_name: str = "Training",
+    render_delay: float = 0.05,
 ) -> Tuple[List[dict], List[dict], object, object]:
     """Collect rollout data for high-level transitions."""
     hl_transitions = []
@@ -84,6 +175,10 @@ def rollout(
     # Reset agent to clear any active option from previous rollout
     # This ensures each rollout starts with a fresh option selection
     agent.reset(ob, info)
+    
+    # Initial render
+    if render_realtime:
+        render_frame_realtime(env, render_window_name, render_delay)
 
     for step in range(num_steps):
         # Check if we need a new high-level action
@@ -116,6 +211,14 @@ def rollout(
         # print(f"reward = {reward}")
         done = terminated or truncated
         assert terminated == False and (truncated == False or step % args.max_episode_steps == args.max_episode_steps - 1), "Each episode should last its full length"
+
+        # Render frame if enabled, before the option is set to inactive
+        if render_realtime:
+            render_frame_realtime(
+                env, render_window_name, render_delay,
+                option_idx=agent._options.index(agent._active_option),
+                option_text=agent._active_option.name,
+            )
 
         # Check if option should terminate
         if agent.active_option.is_terminated(next_ob, next_info):
@@ -348,6 +451,11 @@ if __name__ == "__main__":
     env = make_env(args.env_id, args.seed, args.max_episode_steps, args.task_id)
     print(f"Using fixed task_id={args.task_id} for all episodes")
 
+    # Initialize real-time rendering if enabled
+    render_window_name = "PPO Training - Real-time Rendering"
+    if args.render_realtime:
+        init_realtime_rendering(render_window_name)
+
     # Policy network (owned by script, shared with agent)
     policy_network = PolicyNetwork(
         LearnedHierarchicalAgent.OBS_DIM,
@@ -378,7 +486,12 @@ if __name__ == "__main__":
             optimizer.param_groups[0]["lr"] = frac * args.learning_rate
 
         # Collect rollout
-        transitions, episode_stats, ob, info = rollout(env, agent, ob, info, args.num_steps)
+        transitions, episode_stats, ob, info = rollout(
+            env, agent, ob, info, args.num_steps,
+            render_realtime=args.render_realtime,
+            render_window_name=render_window_name,
+            render_delay=args.render_delay,
+        )
         global_step += args.num_steps
 
         # Track episode stats
@@ -408,13 +521,9 @@ if __name__ == "__main__":
         sps = int(global_step / (time.time() - start_time))
         avg_ret = np.mean(avg_returns) if avg_returns else 0
         avg_suc = np.mean(avg_successes) if avg_successes else 0
-        # pbar.set_description(
-        #     f"SPS: {sps}, Return: {avg_ret:.2f}, Success: {avg_suc:.2%}, "
-        #     f"HL: {len(transitions)}, Loss: {losses['pg_loss']:.4f}"
-        # )
         print(
-            f"SPS: {sps}, Return: {avg_ret:.2f}, Success: {avg_suc:.2%}, "
-            f"HL: {len(transitions)}, Loss: {losses['pg_loss']:.4f}"
+            f"Steps per second: {sps}, Return: {avg_ret:.2f}, Success: {avg_suc:.2%}, "
+            f"High-level transitions: {len(transitions)}, Loss: {losses['pg_loss']:.4f}"
         )
         
         # Track metrics
@@ -460,7 +569,10 @@ if __name__ == "__main__":
             }, checkpoint_path)
             print(f"\nSaved checkpoint to {checkpoint_path}")
 
+    # Cleanup
     env.close()
+    if args.render_realtime:
+        cleanup_realtime_rendering()
     if args.track_with_wandb:
         wandb.finish()
 
