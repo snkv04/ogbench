@@ -34,7 +34,7 @@ class Args:
     
     # Dataset generation
     num_episodes: int = 1000
-    max_episode_steps: int = 1001
+    max_episode_steps: int = 1024
     save_path: Optional[str] = None  # If None, auto-generated
     
     # Action noise (optional, for diversity)
@@ -128,8 +128,6 @@ def main():
     num_val_episodes = args.num_episodes // 10
     
     # Task mode statistics
-    episodes_succeeded = 0  # Episodes where at least one task succeeded
-    episodes_failed = 0  # Episodes with no successes
     tasks_completed = 0  # Total tasks completed across all episodes
     tasks_attempted = 0  # Total tasks attempted across all episodes
     per_task_stats = defaultdict(lambda: {'attempted': 0, 'succeeded': 0})
@@ -197,24 +195,13 @@ def main():
             
             # Handle task completion (agent.done means task was successful)
             # Success = cube is within 4cm of target position
-            did_reset = False
-            if agent.done:
+            # Note: With terminate_at_goal=False, we run ONE task per episode.
+            # When the task is completed, we just track success but do NOT start a new task.
+            if agent.done and not episode_had_success:
+                # Only count the first success (task completed once)
                 tasks_completed += 1
                 per_task_stats[task_id]['succeeded'] += 1
                 episode_had_success = True
-                
-                # Set new target for next task within same episode
-                new_task_id = np.random.randint(1, len(env.unwrapped.task_infos) + 1)
-                while new_task_id == task_id:
-                    new_task_id = np.random.randint(1, len(env.unwrapped.task_infos) + 1)
-                ob, info = env.reset(options={'task_id': new_task_id})
-                agent.reset(ob, info)
-                task_id = new_task_id  # Update current task_id
-                per_task_stats[task_id]['attempted'] += 1
-                tasks_attempted += 1  # New task started
-                option_terminated = True
-                prev_option_terminated = True
-                did_reset = True
             
             # Store data
             dataset['option_indices'].append(option_idx)
@@ -234,17 +221,9 @@ def main():
             if args.render_realtime:
                 render_frame_realtime(env, window_name, args.render_delay)
             
-            # Only update ob from step result if we didn't reset
-            if not did_reset:
-                ob = next_ob
+            ob = next_ob
             step += 1
-        
-        # Track episode outcome
-        # episodes_succeeded = episodes with at least one task completed
-        if episode_had_success:
-            episodes_succeeded += 1
-        else:
-            episodes_failed += 1
+        assert step == args.max_episode_steps, "Each episode should last its full length"
         
         total_steps += step
         if ep_idx < num_train_episodes:
@@ -273,7 +252,6 @@ def main():
     print(f'Total steps: {total_steps}')
     print(f'Total episodes: {total_episodes}')
     print(f'Task success rate: {tasks_completed}/{tasks_attempted} ({100*tasks_completed/tasks_attempted:.1f}%)')
-    print(f'Episodes with at least one success: {episodes_succeeded}/{total_episodes} ({100*episodes_succeeded/total_episodes:.1f}%)')
     
     # Per-task breakdown
     print(f'\nPer-task success rates:')

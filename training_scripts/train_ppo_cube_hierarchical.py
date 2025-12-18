@@ -53,7 +53,7 @@ class Args:
     vf_coef: float = 0.5
     max_grad_norm: float = 0.5
     target_kl: Optional[float] = None
-    episodes_per_rollout: int = 4
+    episodes_per_rollout: int = 2
 
     # Saving
     save_dir: str = ".ogbench/ppo_runs"
@@ -113,7 +113,7 @@ def rollout(
         agent.active_option.step()  # Increment step counter
         next_ob, reward, terminated, truncated, next_info = env.step(low_level_action)
         done = terminated or truncated
-        assert terminated == False and (truncated == False or step % args.max_episode_steps == args.max_episode_steps - 1), "Episode should last its full length"
+        assert terminated == False and (truncated == False or step % args.max_episode_steps == args.max_episode_steps - 1), "Each episode should last its full length"
 
         # Check if option should terminate
         if agent.active_option.is_terminated(next_ob, next_info):
