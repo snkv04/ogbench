@@ -154,9 +154,14 @@ def main():
     num_val_episodes = args.num_episodes // 10
     
     # Task mode statistics
-    tasks_completed = 0  # Total tasks completed across all episodes
-    tasks_attempted = 0  # Total tasks attempted across all episodes
-    per_task_stats = defaultdict(lambda: {'attempted': 0, 'succeeded': 0})
+    tasks_completed_at_end = 0
+    tasks_completed_at_all = 0
+    tasks_attempted = 0
+    per_task_stats = defaultdict(lambda: {
+        'attempted': 0,
+        'completed_at_end': 0,
+        'completed_at_all': 0,
+    })
     
     # Initialize window for real-time rendering if enabled
     window_name = 'Learned Policy - Real-time Rendering'
@@ -207,6 +212,7 @@ def main():
             
             next_ob, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
+            # print(f"done = {done}, step = {step}")
             
             # Track option info
             current_active_option = agent.active_option
@@ -228,12 +234,13 @@ def main():
             
             # Handle task completion (agent.done means task was successful)
             # Success = cube is within 4cm of target position
-            # Note: With terminate_at_goal=False, we run ONE task per episode.
-            # When the task is completed, we just track success but do NOT start a new task.
+            if done and agent.done:
+                tasks_completed_at_end += 1
+                per_task_stats[task_id]['completed_at_end'] += 1
             if agent.done and not episode_had_success:
                 # Only count the first success (task completed once)
-                tasks_completed += 1
-                per_task_stats[task_id]['succeeded'] += 1
+                tasks_completed_at_all += 1
+                per_task_stats[task_id]['completed_at_all'] += 1
                 episode_had_success = True
             
             # Store data
@@ -280,15 +287,18 @@ def main():
     print(f'\n=== Statistics ===')
     print(f'Total steps: {total_steps}')
     print(f'Total episodes: {total_episodes}')
-    print(f'Task success rate: {tasks_completed}/{tasks_attempted} ({100*tasks_completed/tasks_attempted:.1f}%)')
+    print(f'Success rate (tasks completed at end of episode): {tasks_completed_at_end}/{tasks_attempted} ({100*tasks_completed_at_end/tasks_attempted:.1f}%)')
+    print(f'Completion rate (tasks completed at any point in the episode): {tasks_completed_at_all}/{tasks_attempted} ({100*tasks_completed_at_all/tasks_attempted:.1f}%)')
     
     # Per-task breakdown
     print(f'\nPer-task success rates:')
     for task_id in sorted(per_task_stats.keys()):
         stats = per_task_stats[task_id]
         task_name = env.unwrapped.task_infos[task_id - 1]['task_name']
-        rate = 100 * stats['succeeded'] / stats['attempted'] if stats['attempted'] > 0 else 0
-        print(f'  Task {task_id} ({task_name}): {stats["succeeded"]}/{stats["attempted"]} ({rate:.1f}%)')
+        rate = 100 * stats['completed_at_end'] / stats['attempted'] if stats['attempted'] > 0 else 0
+        print(f'  Task {task_id} ({task_name}):')
+        print(f'    Completed at end: {stats["completed_at_end"]}/{stats["attempted"]} ({100*stats["completed_at_end"]/stats["attempted"]:.1f}%)')
+        print(f'    Completed at any point: {stats["completed_at_all"]}/{stats["attempted"]} ({100*stats["completed_at_all"]/stats["attempted"]:.1f}%)')
     
     # Save dataset
     train_path = args.save_path.replace('.npz', '-train.npz')

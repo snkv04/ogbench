@@ -261,8 +261,13 @@ class LearnedHierarchicalAgent(HierarchicalAgent):
         # Using 4cm threshold, same as environment's success threshold
         block_pos = info[f'privileged/block_{self._target_block}_pos']
         target_aligned = np.linalg.norm(self._target_pos - block_pos) <= 0.04
-        if target_aligned:
-            self._done = True
+        self._done = target_aligned
+        # TODO: Right now, the `_done` flag is updated every time `select_high_level_action` is called.
+        # This is relatively granular, since each option only lasts around 10 timesteps or so, but this
+        # is not as granular as it could be and is therefore not perfectly accurate, since (for example)
+        # the task could be completed before calling an option, the option makes the task no longer
+        # completed, but the episode terminates while that option is still active, so the `_done` flag
+        # is incorrectly not updated to False. Fix this.
         
         obs_tensor = self.get_obs_tensor(info).unsqueeze(0)
         with torch.no_grad():
