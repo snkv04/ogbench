@@ -25,6 +25,9 @@ from ogbench.manipspace.oracles.hierarchical.learned_hierarchical_agent import (
 from ogbench.manipspace.oracles.hierarchical.cube_hierarchical import (
     CubeHierarchicalOracle,
 )
+from ogbench.manipspace.oracles.hierarchical.cube_hierarchical_random import (
+    CubeHierarchicalRandom,
+)
 from training_scripts.train_hierarchical_cube_ppo import (
     render_frame_realtime,
     init_realtime_rendering,
@@ -36,7 +39,7 @@ from training_scripts.train_hierarchical_cube_ppo import (
 @dataclass
 class Args:
     # Agent type
-    agent_type: Literal["hierarchical_ppo", "hierarchical_oracle"] = "hierarchical_ppo"
+    agent_type: Literal["hierarchical_ppo", "hierarchical_oracle", "hierarchical_random"] = "hierarchical_ppo"
     checkpoint_path: str = ""  # Path to checkpoint file (required for hierarchical_ppo)
     deterministic: bool = False  # If True, use argmax instead of sampling
     temperature: float = 1.0  # Temperature for sampling (higher = more random)
@@ -163,12 +166,18 @@ def main():
             deterministic=args.deterministic,
             temperature=args.temperature
         )
-    else:  # hierarchical_oracle
+    elif args.agent_type == "hierarchical_oracle":
         agent = CubeHierarchicalOracle(
             env=env,
             max_step=args.max_episode_steps,
         )
         print("Using CubeHierarchicalOracle agent")
+    else:  # hierarchical_random
+        agent = CubeHierarchicalRandom(
+            env=env,
+            max_step=args.max_episode_steps,
+        )
+        print("Using CubeHierarchicalRandom agent")
     agent.reset(ob, info)
     
     # Collect data
