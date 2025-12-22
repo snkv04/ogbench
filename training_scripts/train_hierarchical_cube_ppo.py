@@ -322,6 +322,8 @@ def update(
     """Perform PPO update epochs."""
     batch_size = obs.shape[0]
     clipfracs = []
+    grad_norms_pre = []
+    grad_norms_post = []
 
     for epoch in range(args.update_epochs):
         b_inds = torch.randperm(batch_size, device=obs.device)
@@ -369,11 +371,33 @@ def update(
 
             optimizer.zero_grad()
             loss.backward()
+            
+            # Compute pre-clipped gradient norm
+            total_norm_pre = 0.0
+            for p in policy_network.parameters():
+                if p.grad is not None:
+                    total_norm_pre += p.grad.data.norm(2).item() ** 2
+            grad_norms_pre.append(total_norm_pre ** 0.5)
+            
             nn.utils.clip_grad_norm_(policy_network.parameters(), args.max_grad_norm)
+            
+            # Compute post-clipped gradient norm
+            total_norm_post = 0.0
+            for p in policy_network.parameters():
+                if p.grad is not None:
+                    total_norm_post += p.grad.data.norm(2).item() ** 2
+            grad_norms_post.append(total_norm_post ** 0.5)
+            
             optimizer.step()
 
         if args.target_kl is not None and approx_kl > args.target_kl:
             break
+
+    # Compute explained variance: 1 - Var(returns - values) / Var(returns)
+    y_pred = values.detach()
+    y_true = returns.detach()
+    var_y = torch.var(y_true)
+    explained_var = 1 - torch.var(y_true - y_pred) / (var_y + 1e-8) if var_y > 0 else torch.tensor(0.0)
 
     return {
         'pg_loss': pg_loss.item(),
@@ -381,6 +405,9 @@ def update(
         'entropy': entropy_loss.item(),
         'approx_kl': approx_kl.item(),
         'clipfrac': np.mean(clipfracs) if clipfracs else 0,
+        'explained_var': explained_var.item(),
+        'grad_norm_pre': np.mean(grad_norms_pre) if grad_norms_pre else 0,
+        'grad_norm_post': np.mean(grad_norms_post) if grad_norms_post else 0,
     }
 
 
@@ -533,7 +560,8 @@ if __name__ == "__main__":
             "iteration": iteration,
             "global_step": global_step,
             "sps": sps,
-            "episode_return": float(avg_ret),
+            "avg_episode_return": float(avg_ret),
+            "episode_returns": [stat['return'] for stat in episode_stats],  # Individual episode returns
             "success_rate": float(avg_suc),
             "learning_rate": optimizer.param_groups[0]["lr"],
             "policy_loss": float(losses['pg_loss']),
@@ -541,14 +569,26 @@ if __name__ == "__main__":
             "entropy": float(losses['entropy']),
             "approx_kl": float(losses['approx_kl']),
             "clipfrac": float(losses['clipfrac']),
+            "explained_var": float(losses['explained_var']),
+            "grad_norm_pre": float(losses['grad_norm_pre']),
+            "grad_norm_post": float(losses['grad_norm_post']),
             "high_level_transitions": len(transitions),
         }
         training_metrics.append(metrics)
 
         if args.track_with_wandb:
+            # Log individual episode returns
+            for i, stat in enumerate(episode_stats):
+                prev_global_step = global_step - args.num_steps
+                episode_step = prev_global_step + (i + 1) * args.max_episode_steps
+                wandb.log({
+                    f"charts/episode_returns": stat['return'],
+                }, step=episode_step)
+
+            # Log aggregated metrics
             wandb.log({
                 "charts/SPS": sps,
-                "charts/episode_return": avg_ret,
+                "charts/avg_episode_return": avg_ret,
                 "charts/success_rate": avg_suc,
                 "charts/learning_rate": optimizer.param_groups[0]["lr"],
                 "losses/policy_loss": losses['pg_loss'],
@@ -556,6 +596,9 @@ if __name__ == "__main__":
                 "losses/entropy": losses['entropy'],
                 "losses/approx_kl": losses['approx_kl'],
                 "losses/clipfrac": losses['clipfrac'],
+                "losses/explained_var": losses['explained_var'],
+                "losses/grad_norm_pre": losses['grad_norm_pre'],
+                "losses/grad_norm_post": losses['grad_norm_post'],
                 "rollout/high_level_transitions": len(transitions),
             }, step=global_step)
 
