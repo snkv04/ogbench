@@ -17,6 +17,8 @@ class CubeHierarchicalOracle(HierarchicalAgent):
     
     This demonstrates how to use the hierarchical framework. The high-level
     policy selects options that encapsulate common manipulation behaviors.
+    
+    Works with both `data_collection` and `task` environment modes.
     """
     
     def __init__(self, max_step=200, no_op_option_prob=0.05, suboptimal_option_prob=0.05, *args, **kwargs):
@@ -35,6 +37,8 @@ class CubeHierarchicalOracle(HierarchicalAgent):
         
         # These will be set in reset()
         self._target_block = None
+        self._target_pos = None
+        self._target_yaw = None
         self._final_pos = None
         self._final_yaw = None
         
@@ -45,9 +49,22 @@ class CubeHierarchicalOracle(HierarchicalAgent):
         self._step = 0
         self._max_step = 200
         
-        # Extract task information
-        self._target_block = info['privileged/target_block']
-        self._final_pos = np.random.uniform(*self._env.unwrapped._arm_sampling_bounds)
+        env = self._env.unwrapped
+        
+        # Handle both data_collection and task modes
+        if env._mode == 'data_collection':
+            # In data_collection mode, target info is in privileged keys
+            self._target_block = info['privileged/target_block']
+            self._target_pos = info['privileged/target_block_pos'].copy()
+            self._target_yaw = info['privileged/target_block_yaw'][0]
+        else:
+            # In task mode, target info is in cur_task_info
+            # For cube-single, there's only 1 cube, so target_block = 0
+            self._target_block = 0
+            self._target_pos = env.cur_task_info['goal_xyzs'][self._target_block].copy()
+            self._target_yaw = 0.0  # Task mode uses identity orientation for goals
+        
+        self._final_pos = np.random.uniform(*env._arm_sampling_bounds)
         self._final_yaw = np.random.uniform(-np.pi, np.pi)
         
         # Create options for this task
@@ -115,12 +132,14 @@ class CubeHierarchicalOracle(HierarchicalAgent):
             # Keep x,y at block position, lift z
             return info[f'privileged/block_{self._target_block}_pos']
         
+        # Use stored target info
+        stored_target_pos = self._target_pos
+        stored_target_yaw = self._target_yaw
+        
         def target_yaw_for_lift(ob, info):
             effector_yaw = info['proprio/effector_yaw'][0]
-            block_yaw = info[f'privileged/block_{self._target_block}_yaw'][0]
-            target_yaw = info['privileged/target_block_yaw'][0]
-            # Rotate from block_yaw to target_yaw
-            return self.shortest_yaw(effector_yaw, target_yaw)
+            # Rotate to stored target yaw
+            return self.shortest_yaw(effector_yaw, stored_target_yaw)
         
         self._options.append(
             LiftVerticallyOption(
@@ -136,13 +155,11 @@ class CubeHierarchicalOracle(HierarchicalAgent):
         
         # Option 5: Move above target
         def target_above_pos(ob, info):
-            target_pos = info['privileged/target_block_pos']
-            return target_pos + np.array([0, 0, 0.18])
+            return stored_target_pos + np.array([0, 0, 0.18])
         
         def target_yaw(ob, info):
             effector_yaw = info['proprio/effector_yaw'][0]
-            target_yaw = info['privileged/target_block_yaw'][0]
-            return self.shortest_yaw(effector_yaw, target_yaw)
+            return self.shortest_yaw(effector_yaw, stored_target_yaw)
         
         self._options.append(
             MoveToPositionOption(
@@ -157,7 +174,7 @@ class CubeHierarchicalOracle(HierarchicalAgent):
         
         # Option 6: Move to target
         def target_pos(ob, info):
-            return info['privileged/target_block_pos']
+            return stored_target_pos
         
         self._options.append(
             MoveToPositionOption(
@@ -227,7 +244,7 @@ class CubeHierarchicalOracle(HierarchicalAgent):
         gripper_open = info['proprio/gripper_contact'] < 0.1
         
         block_pos = info[f'privileged/block_{self._target_block}_pos']
-        target_pos = info['privileged/target_block_pos']
+        target_pos = self._target_pos
         
         # Constants from cube_markov.py
         above_threshold = 0.16
