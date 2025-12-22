@@ -239,7 +239,7 @@ class CubeHierarchicalOracle(HierarchicalAgent):
         In a learned hierarchical RL system, this would be replaced with a learned policy.
         """
         effector_pos = info['proprio/effector_pos']
-        effector_yaw = info['proprio/effector_yaw'][0]
+        # effector_yaw = info['proprio/effector_yaw'][0]
         gripper_closed = info['proprio/gripper_contact'] > 0.5
         gripper_open = info['proprio/gripper_contact'] < 0.1
         
@@ -255,7 +255,6 @@ class CubeHierarchicalOracle(HierarchicalAgent):
         pos_aligned = np.linalg.norm(block_pos - effector_pos) <= 0.02
         target_xy_aligned = np.linalg.norm(target_pos[:2] - block_pos[:2]) <= 0.04
         target_pos_aligned = np.linalg.norm(target_pos - block_pos) <= 0.02
-        final_pos_aligned = np.linalg.norm(self._final_pos - effector_pos) <= 0.04
         
         # High-level policy: select appropriate option based on state
         # Note: No-op is at index 0, normal options are at indices 1-9
@@ -289,8 +288,6 @@ class CubeHierarchicalOracle(HierarchicalAgent):
                 normal_option = self._options[8]
             else:
                 # Phase 9: Move to the final position
-                if final_pos_aligned:
-                    self._done = True
                 normal_option = self._options[9]
         
         # Apply stochasticity: with some probability, replace with no-op or suboptimal option
@@ -320,9 +317,11 @@ class CubeHierarchicalOracle(HierarchicalAgent):
         """Select action (handles options automatically)."""
         action = super().select_action(ob, info)
         
+        # Increment timestep counter and check if final position is aligned
         self._step += 1
-        if self._step >= self._max_step:
-            self._done = True
+        effector_pos = info['proprio/effector_pos']
+        final_pos_aligned = np.linalg.norm(self._final_pos - effector_pos) <= 0.04
+        self._done = final_pos_aligned
             
         return action
 
