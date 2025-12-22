@@ -1,10 +1,14 @@
-"""Run inference, and generate a dataset, using a trained hierarchical PPO policy."""
+"""
+Runs inference, and generates a dataset, using an agent trained for the cube environment.
+
+The loaded policy can be a hierarchical agent trained with PPO or a rule-based oracle.
+"""
 
 import pathlib
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, List
+from typing import Literal, Optional, List
 
 import imageio.v2 as imageio
 import gymnasium
@@ -18,7 +22,10 @@ from ogbench.manipspace.oracles.hierarchical.learned_hierarchical_agent import (
     PolicyNetwork,
     LearnedHierarchicalAgent,
 )
-from training_scripts.train_ppo_cube_hierarchical import (
+from ogbench.manipspace.oracles.hierarchical.cube_hierarchical import (
+    CubeHierarchicalOracle,
+)
+from training_scripts.train_hierarchical_cube_ppo import (
     render_frame_realtime,
     init_realtime_rendering,
     cleanup_realtime_rendering,
@@ -28,8 +35,12 @@ from training_scripts.train_ppo_cube_hierarchical import (
 
 @dataclass
 class Args:
-    # Model loading
-    checkpoint_path: str = ""  # Path to checkpoint file (required)
+    # Agent type
+    agent_type: Literal["hierarchical_ppo", "hierarchical_oracle"] = "hierarchical_ppo"
+    checkpoint_path: str = ""  # Path to checkpoint file (required for hierarchical_ppo)
+    deterministic: bool = False  # If True, use argmax instead of sampling
+    temperature: float = 1.0  # Temperature for sampling (higher = more random)
+
     
     # Environment
     env_name: str = "cube-single-v0"
@@ -44,10 +55,6 @@ class Args:
     # Action noise (optional, for diversity)
     noise: float = 0.0
     
-    # Policy behavior
-    deterministic: bool = False  # If True, use argmax instead of sampling
-    temperature: float = 1.0  # Temperature for sampling (higher = more random)
-    
     # Visualization
     save_first_episode_video: bool = False
     render_realtime: bool = False
@@ -55,6 +62,14 @@ class Args:
     
     # Device
     cuda: bool = True
+
+
+def task_done(env, info, threshold: float = 0.04) -> bool:
+    # In task mode, target_block is always 0 for cube-single
+    target_block = 0
+    target_pos = env.unwrapped.cur_task_info['goal_xyzs'][target_block]
+    block_pos = info[f'privileged/block_{target_block}_pos']
+    return np.linalg.norm(target_pos - block_pos) <= threshold
 
 
 def save_episode_video(
@@ -98,22 +113,26 @@ def save_episode_video(
 def main():
     args = tyro.cli(Args)
     
-    assert args.checkpoint_path, "Must provide --checkpoint_path"
+    if args.agent_type == "hierarchical_ppo":
+        assert args.checkpoint_path, "Must provide --checkpoint_path for hierarchical_ppo agent"
     
     # Set save path
     if args.save_path is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         policy_type = "deterministic" if args.deterministic else f"temp{args.temperature}"
-        args.save_path = f".ogbench/data/{args.env_name}-task{args.task_id}-{policy_type}-{timestamp}.npz"
+        args.save_path = f".ogbench/data/{args.env_name}-{args.agent_type}-task{args.task_id}-{policy_type}-{timestamp}.npz"
     
     # Device
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
-    print(f"Using device: {device}")
+    if args.agent_type == "hierarchical_ppo":
+        print(f"Using device: {device}")
     
-    # Load checkpoint
-    print(f"Loading checkpoint from: {args.checkpoint_path}")
-    checkpoint = torch.load(args.checkpoint_path, map_location=device, weights_only=False)
-    print(f"Checkpoint trained for {checkpoint['iteration']} iterations, {checkpoint['global_step']} steps")
+    # Load checkpoint (only for PPO agent)
+    checkpoint = None
+    if args.agent_type == "hierarchical_ppo":
+        print(f"Loading checkpoint from: {args.checkpoint_path}")
+        checkpoint = torch.load(args.checkpoint_path, map_location=device, weights_only=False)
+        print(f"Checkpoint trained for {checkpoint['iteration']} iterations, {checkpoint['global_step']} steps")
     
     # Initialize environment in task mode with fixed task
     env = gymnasium.make(
@@ -125,24 +144,31 @@ def main():
     )
     print(f"Using fixed task_id={args.task_id} for all episodes")
     
-    # Initialize policy network
-    policy_network = PolicyNetwork(
-        LearnedHierarchicalAgent.OBS_DIM,
-        LearnedHierarchicalAgent.NUM_OPTIONS,
-        hidden_dim=256,
-        device=device,
-    )
-    policy_network.load_state_dict(checkpoint['model_state_dict'])
-    policy_network.eval()
-    print("Policy network loaded successfully")
-    
-    # Initialize agent
+    # Initialize agent based on agent_type
     ob, info = env.reset(seed=args.seed)
-    agent = LearnedHierarchicalAgent(
-        env, policy_network, device,
-        deterministic=args.deterministic,
-        temperature=args.temperature
-    )
+    if args.agent_type == "hierarchical_ppo":
+        # Initialize policy network
+        policy_network = PolicyNetwork(
+            LearnedHierarchicalAgent.OBS_DIM,
+            LearnedHierarchicalAgent.NUM_OPTIONS,
+            hidden_dim=256,
+            device=device,
+        )
+        policy_network.load_state_dict(checkpoint['model_state_dict'])
+        policy_network.eval()
+        print("Policy network loaded successfully")
+        
+        agent = LearnedHierarchicalAgent(
+            env, policy_network, device,
+            deterministic=args.deterministic,
+            temperature=args.temperature
+        )
+    else:  # hierarchical_oracle
+        agent = CubeHierarchicalOracle(
+            env=env,
+            max_step=args.max_episode_steps,
+        )
+        print("Using CubeHierarchicalOracle agent")
     agent.reset(ob, info)
     
     # Collect data
@@ -169,8 +195,10 @@ def main():
         init_realtime_rendering(window_name)
     
     print(f"\nGenerating {num_train_episodes + num_val_episodes} episodes...")
+    print(f"  Agent type: {args.agent_type}")
     print(f"  Train: {num_train_episodes}, Val: {num_val_episodes}")
-    print(f"  Deterministic: {args.deterministic}, Temperature: {args.temperature}")
+    if args.agent_type == "hierarchical_ppo":
+        print(f"  Deterministic: {args.deterministic}, Temperature: {args.temperature}")
     print(f"  Action noise: {args.noise}")
     
     for ep_idx in trange(num_train_episodes + num_val_episodes):
@@ -216,38 +244,30 @@ def main():
             
             # Track option info
             current_active_option = agent.active_option
-            if current_active_option is not None:
-                option_idx = agent._options.index(current_active_option)
-                option_name = current_active_option.name
-                option_initiated = prev_option_terminated
-                option_terminated = not current_active_option.active
-                prev_option_terminated = option_terminated
-                current_option_idx = option_idx
-                current_option_name = option_name
-            else:
-                option_idx = -1
-                option_name = "none"
-                option_initiated = False
-                option_terminated = False
-                current_option_idx = None
-                current_option_name = None
+            assert current_active_option is not None, "Current active option should never be None after a timestep"
+            current_option_idx = agent._options.index(current_active_option)
+            current_option_name = current_active_option.name
+            current_option_initiated = prev_option_terminated
+            current_option_terminated = not current_active_option.active
+            prev_option_terminated = current_option_terminated
             
-            # Handle task completion (agent.done means task was successful)
+            # Handle task completion (check if block is aligned with target)
             # Success = cube is within 4cm of target position
-            if done and agent.done:
+            is_task_done = task_done(env, info)
+            if done and is_task_done:
                 tasks_completed_at_end += 1
                 per_task_stats[task_id]['completed_at_end'] += 1
-            if agent.done and not episode_had_success:
+            if is_task_done and not episode_had_success:
                 # Only count the first success (task completed once)
                 tasks_completed_at_all += 1
                 per_task_stats[task_id]['completed_at_all'] += 1
                 episode_had_success = True
             
             # Store data
-            dataset['option_indices'].append(option_idx)
-            dataset['option_names'].append(option_name)
-            dataset['option_initiated'].append(option_initiated)
-            dataset['option_terminated'].append(option_terminated)
+            dataset['option_indices'].append(current_option_idx)
+            dataset['option_names'].append(current_option_name)
+            dataset['option_initiated'].append(current_option_initiated)
+            dataset['option_terminated'].append(current_option_terminated)
             dataset['observations'].append(ob)
             dataset['actions'].append(action)
             dataset['terminals'].append(done)
@@ -285,6 +305,11 @@ def main():
     # Print statistics
     total_episodes = num_train_episodes + num_val_episodes
     print(f'\n=== Statistics ===')
+    temperature_str = ""
+    if args.agent_type == "hierarchical_ppo":
+        temperature_str = f"deterministic" if args.deterministic else f"temperature {args.temperature}"
+        temperature_str = f"({temperature_str})"
+    print(f'Agent type: {args.agent_type} {temperature_str}')
     print(f'Total steps: {total_steps}')
     print(f'Total episodes: {total_episodes}')
     print(f'Success rate (tasks completed at end of episode): {tasks_completed_at_end}/{tasks_attempted} ({100*tasks_completed_at_end/tasks_attempted:.1f}%)')

@@ -1,3 +1,5 @@
+"""Trains a hierarchical RL agent for the cube environment using PPO."""
+
 import json
 import os
 import random

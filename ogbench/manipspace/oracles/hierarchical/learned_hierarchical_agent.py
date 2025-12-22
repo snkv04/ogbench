@@ -59,8 +59,12 @@ class PolicyNetwork(nn.Module):
         if action is None:
             if deterministic:
                 action = logits.argmax(dim=-1)
+                # print(f"Deterministic action: {action}")
+                # print(f"Logits: {logits}")
+                # print(f"Probs: {probs}")
             else:
                 action = probs.sample()
+                # print(f"Sampled action: {action}")
         return action, probs.log_prob(action), probs.entropy(), self.critic(hidden)
 
 
