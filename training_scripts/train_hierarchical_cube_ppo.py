@@ -46,7 +46,7 @@ class Args:
     env_id: str = "cube-single-v0"
     task_id: int = 0  # Fixed task ID for all episodes (0 = default task)
     total_timesteps: int = 1000000
-    learning_rate: float = 3e-4
+    learning_rate: float = 1e-3
     num_envs: int = 1
     num_steps: int = 2048
     anneal_lr: bool = True
@@ -200,6 +200,8 @@ def rollout(
                     'value': current_hl_info['value'],
                     'reward': current_hl_info['accumulated_reward'],
                     'option_length': current_hl_info['option_length'],
+                    'start_step': current_hl_info['start_step'],
+                    'end_step': step - 1,  # Previous option ended on previous step
                     'done': False,
                 })
 
@@ -212,6 +214,7 @@ def rollout(
                 **agent.last_decision,
                 'accumulated_reward': 0.0,
                 'option_length': 0,
+                'start_step': step,
             }
 
         # Execute low-level action from active option
@@ -254,6 +257,8 @@ def rollout(
                     'value': current_hl_info['value'],
                     'reward': current_hl_info['accumulated_reward'],
                     'option_length': current_hl_info['option_length'],
+                    'start_step': current_hl_info['start_step'],
+                    'end_step': step,  # Current option ended on current step
                     'done': True,
                 })
                 current_hl_info = None
@@ -272,7 +277,7 @@ def rollout(
             ob, info = next_ob, next_info
 
     # Handle remaining transition at end of rollout
-    if current_hl_info is not None and current_hl_info['accumulated_reward'] != 0:
+    if current_hl_info is not None and current_hl_info['option_length'] > 0:
         hl_transitions.append({
             'obs': current_hl_info['obs'],
             'action': current_hl_info['action'],
@@ -280,6 +285,8 @@ def rollout(
             'value': current_hl_info['value'],
             'reward': current_hl_info['accumulated_reward'],
             'option_length': current_hl_info['option_length'],
+            'start_step': current_hl_info['start_step'],
+            'end_step': num_steps - 1,  # Current option ended on last step of rollout
             'done': False,
         })
 
@@ -315,6 +322,7 @@ def compute_gae(
         else:
             next_exists = 1.0 - dones[t]
             nextvalue = values[t + 1]
+        # print(f"t = {t}, start_step = {transitions[t]['start_step']}, end_step = {transitions[t]['end_step']}, option_length = {option_lengths[t]}, next_exists = {next_exists}, nextvalue = {nextvalue}")
 
         gamma_to_k = gamma ** option_lengths[t]
         delta = rewards[t] + gamma_to_k * nextvalue * next_exists - values[t]
