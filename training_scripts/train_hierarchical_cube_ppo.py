@@ -50,7 +50,8 @@ class Args:
     num_envs: int = 1
     num_steps: int = 2048
     anneal_lr: bool = True
-    gamma: float = 0.99
+    option_gamma: float = 0.9
+    gae_gamma: float = 0.99
     gae_lambda: float = 0.95
     num_minibatches: int = 32
     update_epochs: int = 10
@@ -169,6 +170,7 @@ def rollout(
     ob,
     info,
     num_steps: int,
+    option_gamma: float = 0.9,
     render_realtime: bool = False,
     render_window_name: str = "Training",
     render_delay: float = 0.05,
@@ -178,6 +180,7 @@ def rollout(
     episode_stats = []
     episode_return = 0.0  # Track cumulative return for current episode
     current_hl_info = None
+    option_step = 0  # Track steps within current option for discounting
     
     # Reset agent to clear any active option from previous rollout
     # This ensures each rollout starts with a fresh option selection
@@ -210,6 +213,7 @@ def rollout(
                 **agent.last_decision,
                 'accumulated_reward': 0.0,
             }
+            option_step = 0  # Reset option step counter
 
         # Execute low-level action from active option
         low_level_action = agent.active_option.select_action(ob, info)
@@ -231,7 +235,9 @@ def rollout(
         if agent.active_option.is_terminated(next_ob, next_info):
             agent.active_option.reset()
 
-        current_hl_info['accumulated_reward'] += reward
+        # Accumulate discounted reward for the option
+        current_hl_info['accumulated_reward'] += (option_gamma ** option_step) * reward
+        option_step += 1
         episode_return += reward
 
         if done:
@@ -281,7 +287,7 @@ def rollout(
 def compute_gae(
     transitions: List[dict],
     next_value: torch.Tensor,
-    gamma: float,
+    gae_gamma: float,
     gae_lambda: float,
     device: torch.device,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -306,8 +312,8 @@ def compute_gae(
             nextnonterminal = 1.0 - dones[t]
             nextvalue = values[t + 1]
 
-        delta = rewards[t] + gamma * nextvalue * nextnonterminal - values[t]
-        advantages[t] = lastgaelam = delta + gamma * gae_lambda * nextnonterminal * lastgaelam
+        delta = rewards[t] + gae_gamma * nextvalue * nextnonterminal - values[t]
+        advantages[t] = lastgaelam = delta + gae_gamma * gae_lambda * nextnonterminal * lastgaelam
 
     returns = advantages + values
     return obs, actions, logprobs, values, advantages, returns
@@ -526,6 +532,7 @@ if __name__ == "__main__":
         # Collect rollout
         transitions, episode_stats, ob, info = rollout(
             env, agent, ob, info, args.num_steps,
+            option_gamma=args.option_gamma,
             render_realtime=args.render_realtime,
             render_window_name=render_window_name,
             render_delay=args.render_delay,
@@ -549,7 +556,7 @@ if __name__ == "__main__":
             else:
                 next_value = torch.zeros(1, device=device)
         obs, actions, logprobs, values, advantages, returns = compute_gae(
-            transitions, next_value, args.gamma, args.gae_lambda, device
+            transitions, next_value, args.gae_gamma, args.gae_lambda, device
         )
 
         # Update policy

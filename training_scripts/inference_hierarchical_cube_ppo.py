@@ -324,6 +324,7 @@ def main():
         temperature_str = f"deterministic" if args.deterministic else f"temperature {args.temperature}"
         temperature_str = f"({temperature_str})"
     print(f'Agent type: {args.agent_type} {temperature_str}')
+    print(f'Checkpoint path: {args.checkpoint_path}')
     print(f'Total steps: {total_steps}')
     print(f'Total episodes: {total_episodes}')
     print(f'Success rate (tasks completed at end of episode): {tasks_completed_at_end}/{tasks_attempted} ({100*tasks_completed_at_end/tasks_attempted:.1f}%)')
