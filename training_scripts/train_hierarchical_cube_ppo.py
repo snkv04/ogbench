@@ -50,8 +50,7 @@ class Args:
     num_envs: int = 1
     num_steps: int = 2048
     anneal_lr: bool = True
-    option_gamma: float = 0.9
-    gae_gamma: float = 0.99
+    gamma: float = 0.98
     gae_lambda: float = 0.95
     num_minibatches: int = 32
     update_epochs: int = 10
@@ -170,7 +169,7 @@ def rollout(
     ob,
     info,
     num_steps: int,
-    option_gamma: float = 0.9,
+    gamma: float = 0.98,
     render_realtime: bool = False,
     render_window_name: str = "Training",
     render_delay: float = 0.05,
@@ -180,7 +179,6 @@ def rollout(
     episode_stats = []
     episode_return = 0.0  # Track cumulative return for current episode
     current_hl_info = None
-    option_step = 0  # Track steps within current option for discounting
     
     # Reset agent to clear any active option from previous rollout
     # This ensures each rollout starts with a fresh option selection
@@ -201,6 +199,7 @@ def rollout(
                     'logprob': current_hl_info['logprob'],
                     'value': current_hl_info['value'],
                     'reward': current_hl_info['accumulated_reward'],
+                    'option_length': current_hl_info['option_length'],
                     'done': False,
                 })
 
@@ -212,8 +211,8 @@ def rollout(
             current_hl_info = {
                 **agent.last_decision,
                 'accumulated_reward': 0.0,
+                'option_length': 0,
             }
-            option_step = 0  # Reset option step counter
 
         # Execute low-level action from active option
         low_level_action = agent.active_option.select_action(ob, info)
@@ -236,8 +235,9 @@ def rollout(
             agent.active_option.reset()
 
         # Accumulate discounted reward for the option
-        current_hl_info['accumulated_reward'] += (option_gamma ** option_step) * reward
-        option_step += 1
+        option_steps_so_far = current_hl_info['option_length']
+        current_hl_info['accumulated_reward'] += (gamma ** option_steps_so_far) * reward
+        current_hl_info['option_length'] += 1
         episode_return += reward
 
         if done:
@@ -253,6 +253,7 @@ def rollout(
                     'logprob': current_hl_info['logprob'],
                     'value': current_hl_info['value'],
                     'reward': current_hl_info['accumulated_reward'],
+                    'option_length': current_hl_info['option_length'],
                     'done': True,
                 })
                 current_hl_info = None
@@ -278,6 +279,7 @@ def rollout(
             'logprob': current_hl_info['logprob'],
             'value': current_hl_info['value'],
             'reward': current_hl_info['accumulated_reward'],
+            'option_length': current_hl_info['option_length'],
             'done': False,
         })
 
@@ -287,7 +289,7 @@ def rollout(
 def compute_gae(
     transitions: List[dict],
     next_value: torch.Tensor,
-    gae_gamma: float,
+    gamma: float,
     gae_lambda: float,
     device: torch.device,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -299,21 +301,24 @@ def compute_gae(
     logprobs = torch.stack([t['logprob'] for t in transitions])
     rewards = torch.tensor([t['reward'] for t in transitions], dtype=torch.float32, device=device)
     dones = torch.tensor([t['done'] for t in transitions], dtype=torch.float32, device=device)
+    option_lengths = torch.tensor([t['option_length'] for t in transitions], dtype=torch.float32, device=device)
     values = torch.cat([t['value'] for t in transitions])
 
     advantages = torch.zeros(n, device=device)
     lastgaelam = 0
 
-    for t in reversed(range(n)):
+    for t in reversed(range(n)):        
         if t == n - 1:
-            nextnonterminal = 1.0 - dones[t]
+            next_exists = 1.0 - dones[t]
+            # Uses next_value only if the rollout ended where an episode didn't end
             nextvalue = next_value if not dones[t] else torch.zeros(1, device=device)
         else:
-            nextnonterminal = 1.0 - dones[t]
+            next_exists = 1.0 - dones[t]
             nextvalue = values[t + 1]
 
-        delta = rewards[t] + gae_gamma * nextvalue * nextnonterminal - values[t]
-        advantages[t] = lastgaelam = delta + gae_gamma * gae_lambda * nextnonterminal * lastgaelam
+        gamma_to_k = gamma ** option_lengths[t]
+        delta = rewards[t] + gamma_to_k * nextvalue * next_exists - values[t]
+        advantages[t] = lastgaelam = delta + gamma_to_k * gae_lambda * next_exists * lastgaelam
 
     returns = advantages + values
     return obs, actions, logprobs, values, advantages, returns
@@ -532,7 +537,7 @@ if __name__ == "__main__":
         # Collect rollout
         transitions, episode_stats, ob, info = rollout(
             env, agent, ob, info, args.num_steps,
-            option_gamma=args.option_gamma,
+            gamma=args.gamma,
             render_realtime=args.render_realtime,
             render_window_name=render_window_name,
             render_delay=args.render_delay,
@@ -556,7 +561,7 @@ if __name__ == "__main__":
             else:
                 next_value = torch.zeros(1, device=device)
         obs, actions, logprobs, values, advantages, returns = compute_gae(
-            transitions, next_value, args.gae_gamma, args.gae_lambda, device
+            transitions, next_value, args.gamma, args.gae_lambda, device
         )
 
         # Update policy
