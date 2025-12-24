@@ -76,7 +76,6 @@ class LearnedHierarchicalAgent(HierarchicalAgent):
     handled by the pre-defined options (MoveToPosition, Grasp, etc.).
     
     Attributes:
-        NUM_OPTIONS: Number of available options (10 for cube manipulation)
         OBS_DIM: Dimension of observation features for the policy (14)
             - effector_pos (3)
             - effector_yaw (1)
@@ -88,11 +87,11 @@ class LearnedHierarchicalAgent(HierarchicalAgent):
             - target_yaw (1)
     """
 
-    NUM_OPTIONS = 10
     OBS_DIM = 14  # effector_pos(3) + effector_yaw(1) + gripper(2) + block(4) + target(4)
 
     def __init__(self, env, policy_network: PolicyNetwork, device: torch.device,
-                 deterministic: bool = False, temperature: float = 1.0):
+                 deterministic: bool = False, temperature: float = 1.0,
+                 disable_no_op: bool = False, no_op_duration: int = 10):
         """Initialize the learned hierarchical agent.
         
         Args:
@@ -101,6 +100,8 @@ class LearnedHierarchicalAgent(HierarchicalAgent):
             device: Torch device (cpu or cuda)
             deterministic: If True, use argmax for option selection
             temperature: Temperature for sampling options (higher = more random)
+            disable_no_op: If True, disable the no-op option (index 0)
+            no_op_duration: Duration of the no-op option
         """
         super().__init__(options=[], env=env)
         self.policy_network = policy_network
@@ -111,6 +112,8 @@ class LearnedHierarchicalAgent(HierarchicalAgent):
         self._final_pos = None
         self._final_yaw = None
         self.last_decision = None  # Stores {obs, action, logprob, value} for PPO
+        self.disable_no_op = disable_no_op
+        self.no_op_duration = no_op_duration
 
     def reset(self, ob, info):
         """Reset the agent for a new episode/task.
@@ -146,7 +149,7 @@ class LearnedHierarchicalAgent(HierarchicalAgent):
         """Create the set of options for cube manipulation.
         
         Returns:
-            List of 10 options:
+            List of 10 options (or 9, if disable_no_op is True):
                 0: no_op - Do nothing for 10 steps
                 1: move_above_block - Move end-effector above the target block
                 2: move_to_block - Move end-effector to the target block
@@ -194,8 +197,7 @@ class LearnedHierarchicalAgent(HierarchicalAgent):
         def get_final_yaw(ob, info):
             return final_yaw
 
-        return [
-            NoOpOption('no_op', env, duration=10),
+        options = [
             MoveToPositionOption('move_above_block', env, block_above_pos, block_yaw, gripper_state=-1, min_norm=self._min_norm),
             MoveToPositionOption('move_to_block', env, block_pos, block_yaw, gripper_state=-1, min_norm=self._min_norm),
             GraspOption('grasp_block', env, block_pos, block_yaw, min_norm=self._min_norm),
@@ -206,6 +208,9 @@ class LearnedHierarchicalAgent(HierarchicalAgent):
             LiftVerticallyOption('lift_after_release', env, block_pos, target_height=0.32, target_yaw_fn=get_final_yaw, gripper_state=-1, min_norm=self._min_norm),
             MoveToPositionOption('move_to_final', env, get_final_pos, get_final_yaw, gripper_state=-1, min_norm=self._min_norm),
         ]
+        if not self.disable_no_op:
+            options.insert(0, NoOpOption('no_op', env, duration=self.no_op_duration))
+        return options
 
     @staticmethod
     def _shortest_yaw(current_yaw: float, target_yaw: float) -> float:

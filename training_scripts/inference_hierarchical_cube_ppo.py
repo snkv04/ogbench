@@ -44,7 +44,10 @@ class Args:
     deterministic: bool = False  # If True, use argmax instead of sampling
     temperature: float = 1.0  # Temperature for sampling (higher = more random)
 
-    
+    # Agent-specific arguments
+    disable_no_op: bool = False
+    no_op_duration: int = 10
+
     # Environment
     env_name: str = "cube-single-v0"
     seed: int = 1048596
@@ -153,7 +156,7 @@ def main():
         # Initialize policy network
         policy_network = PolicyNetwork(
             LearnedHierarchicalAgent.OBS_DIM,
-            LearnedHierarchicalAgent.NUM_OPTIONS,
+            10 if not args.disable_no_op else 9,
             hidden_dim=256,
             device=device,
         )
@@ -164,7 +167,9 @@ def main():
         agent = LearnedHierarchicalAgent(
             env, policy_network, device,
             deterministic=args.deterministic,
-            temperature=args.temperature
+            temperature=args.temperature,
+            disable_no_op=args.disable_no_op,
+            no_op_duration=args.no_op_duration,
         )
     elif args.agent_type == "hierarchical_oracle":
         agent = CubeHierarchicalOracle(

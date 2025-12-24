@@ -38,7 +38,11 @@ class Args:
     wandb_project_name: str = "ppo_cube_hierarchical"
     wandb_entity: Optional[str] = None
 
-    # Algorithm specific arguments
+    # Agent-specific arguments
+    disable_no_op: bool = False
+    no_op_duration: int = 10
+
+    # Algorithm-specific arguments
     env_id: str = "cube-single-v0"
     task_id: int = 0  # Fixed task ID for all episodes (0 = default task)
     total_timesteps: int = 1000000
@@ -63,6 +67,7 @@ class Args:
     save_dir: str = ".ogbench/ppo_runs"
     checkpoint_freq: int = 100
     save_model: bool = True
+    run_name: str = ""
 
     # Visualization
     render_realtime: bool = False
@@ -440,7 +445,7 @@ if __name__ == "__main__":
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     args.num_iterations = args.total_timesteps // args.batch_size
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_name = f"{args.env_id}__{args.seed}__{timestamp}"
+    run_name = f"{args.run_name}__{timestamp}" if args.run_name else f"{args.env_id}__{args.seed}__{timestamp}"
     assert args.batch_size % args.num_minibatches == 0, "Batch size must be divisible by num_minibatches"
     # if args.batch_size % args.num_minibatches != 0:
     #     print(f"WARNING: batch_size ({args.batch_size}) is not divisible by num_minibatches ({args.num_minibatches}). "
@@ -488,7 +493,7 @@ if __name__ == "__main__":
     # Policy network (owned by script, shared with agent)
     policy_network = PolicyNetwork(
         LearnedHierarchicalAgent.OBS_DIM,
-        LearnedHierarchicalAgent.NUM_OPTIONS,
+        10 if not args.disable_no_op else 9,
         hidden_dim=256,
         device=device,
     )
@@ -496,7 +501,11 @@ if __name__ == "__main__":
 
     # Hierarchical agent (holds reference to policy network)
     ob, info = env.reset(seed=args.seed)
-    agent = LearnedHierarchicalAgent(env, policy_network, device)
+    agent = LearnedHierarchicalAgent(
+        env, policy_network, device,
+        disable_no_op=args.disable_no_op,
+        no_op_duration=args.no_op_duration,
+    )
     agent.reset(ob, info)
 
     # Tracking
