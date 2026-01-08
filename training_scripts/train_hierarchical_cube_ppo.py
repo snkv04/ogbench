@@ -41,6 +41,7 @@ class Args:
     # Agent-specific arguments
     disable_no_op: bool = False
     no_op_duration: int = 10
+    treat_options_as_one_step: bool = False  # If True, option reward = last step reward, GAE uses single-step discounting
 
     # Algorithm-specific arguments
     env_id: str = "cube-single-v0"
@@ -170,6 +171,7 @@ def rollout(
     info,
     num_steps: int,
     gamma: float = 0.98,
+    treat_options_as_one_step: bool = False,
     render_realtime: bool = False,
     render_window_name: str = "Training",
     render_delay: float = 0.05,
@@ -193,6 +195,12 @@ def rollout(
         if agent.active_option is None or not agent.active_option.active:
             # Store previous high-level transition
             if current_hl_info is not None:
+                # Accumulate reward for the episode, which, if treating options as
+                # one step each, means that the episode return gets incremented by
+                # the reward from the last timestep of the option
+                if treat_options_as_one_step:
+                    episode_return += current_hl_info['accumulated_reward']
+
                 hl_transitions.append({
                     'obs': current_hl_info['obs'],
                     'action': current_hl_info['action'],
@@ -237,11 +245,19 @@ def rollout(
         if agent.active_option.is_terminated(next_ob, next_info):
             agent.active_option.reset()
 
-        # Accumulate discounted reward for the option
-        option_steps_so_far = current_hl_info['option_length']
-        current_hl_info['accumulated_reward'] += (gamma ** option_steps_so_far) * reward
+        # Accumulate reward for the option
+        if treat_options_as_one_step:
+            # Only use the last timestep's reward (overwrite)
+            current_hl_info['accumulated_reward'] = reward
+        else:
+            # Accumulate discounted reward across option steps
+            option_steps_so_far = current_hl_info['option_length']
+            current_hl_info['accumulated_reward'] += (gamma ** option_steps_so_far) * reward
         current_hl_info['option_length'] += 1
-        episode_return += reward
+
+        # Accumulate reward for the episode
+        if not treat_options_as_one_step:
+            episode_return += reward
 
         if done:
             # print(f"\nAt step {step}, episode is done!")
@@ -250,6 +266,12 @@ def rollout(
             
             # Store final transition for this episode
             if current_hl_info is not None:
+                # Accumulate reward for the episode, which, if treating options as
+                # one step each, means that the episode return gets incremented by
+                # the reward from the last timestep of the option
+                if treat_options_as_one_step:
+                    episode_return += current_hl_info['accumulated_reward']
+
                 hl_transitions.append({
                     'obs': current_hl_info['obs'],
                     'action': current_hl_info['action'],
@@ -299,6 +321,7 @@ def compute_gae(
     gamma: float,
     gae_lambda: float,
     device: torch.device,
+    treat_options_as_one_step: bool = False,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Compute GAE advantages and returns."""
     n = len(transitions)
@@ -324,9 +347,15 @@ def compute_gae(
             nextvalue = values[t + 1]
         # print(f"t = {t}, start_step = {transitions[t]['start_step']}, end_step = {transitions[t]['end_step']}, option_length = {option_lengths[t]}, next_exists = {next_exists}, nextvalue = {nextvalue}")
 
-        gamma_to_k = gamma ** option_lengths[t]
+        if treat_options_as_one_step:
+            # Use standard single-step discounting (ignore option length)
+            gamma_to_k = gamma
+        else:
+            # Use option-length-based discounting
+            gamma_to_k = gamma ** option_lengths[t]
         delta = rewards[t] + gamma_to_k * nextvalue * next_exists - values[t]
         advantages[t] = lastgaelam = delta + gamma_to_k * gae_lambda * next_exists * lastgaelam
+        # advantages[t] = lastgaelam = delta + gamma_to_k * (gae_lambda ** option_lengths[t]) * next_exists * lastgaelam
 
     returns = advantages + values
     return obs, actions, logprobs, values, advantages, returns
@@ -546,6 +575,7 @@ if __name__ == "__main__":
         transitions, episode_stats, ob, info = rollout(
             env, agent, ob, info, args.num_steps,
             gamma=args.gamma,
+            treat_options_as_one_step=args.treat_options_as_one_step,
             render_realtime=args.render_realtime,
             render_window_name=render_window_name,
             render_delay=args.render_delay,
@@ -569,7 +599,8 @@ if __name__ == "__main__":
             else:
                 next_value = torch.zeros(1, device=device)
         obs, actions, logprobs, values, advantages, returns = compute_gae(
-            transitions, next_value, args.gamma, args.gae_lambda, device
+            transitions, next_value, args.gamma, args.gae_lambda, device,
+            treat_options_as_one_step=args.treat_options_as_one_step,
         )
 
         # Update policy
@@ -605,6 +636,7 @@ if __name__ == "__main__":
         }
         training_metrics.append(metrics)
 
+        # Logging for each training iteration
         if args.track_with_wandb:
             # Log individual episode returns
             for i, stat in enumerate(episode_stats):
@@ -616,15 +648,20 @@ if __name__ == "__main__":
 
             # Log aggregated metrics
             wandb.log({
+                # (Time)steps per second
                 "charts/SPS": sps,
                 "charts/avg_episode_return": avg_ret,
                 "charts/success_rate": avg_suc,
                 "charts/learning_rate": optimizer.param_groups[0]["lr"],
                 "losses/policy_loss": losses['pg_loss'],
                 "losses/value_loss": losses['v_loss'],
+                # How much the policy distribution is spread out over options
                 "losses/entropy": losses['entropy'],
+                # Approximation of the KL divergence between the new and old policy
                 "losses/approx_kl": losses['approx_kl'],
+                # Proportion of timesteps in the rollout where the policy ratio was clipped
                 "losses/clipfrac": losses['clipfrac'],
+                # Amount of variance in returns explained by values from critic
                 "losses/explained_var": losses['explained_var'],
                 "losses/grad_norm_pre": losses['grad_norm_pre'],
                 "losses/grad_norm_post": losses['grad_norm_post'],
