@@ -195,12 +195,6 @@ def rollout(
         if agent.active_option is None or not agent.active_option.active:
             # Store previous high-level transition
             if current_hl_info is not None:
-                # Accumulate reward for the episode, which, if treating options as
-                # one step each, means that the episode return gets incremented by
-                # the reward from the last timestep of the option
-                if treat_options_as_one_step:
-                    episode_return += current_hl_info['accumulated_reward']
-
                 hl_transitions.append({
                     'obs': current_hl_info['obs'],
                     'action': current_hl_info['action'],
@@ -247,17 +241,13 @@ def rollout(
 
         # Accumulate reward for the option
         if treat_options_as_one_step:
-            # Only use the last timestep's reward (overwrite)
-            current_hl_info['accumulated_reward'] = reward
+            # Accumulate non-discounted reward across option steps
+            current_hl_info['accumulated_reward'] += reward
         else:
-            # Accumulate discounted reward across option steps
-            option_steps_so_far = current_hl_info['option_length']
-            current_hl_info['accumulated_reward'] += (gamma ** option_steps_so_far) * reward
+            # Perform backward discounting of reward across option steps
+            current_hl_info['accumulated_reward'] = reward + gamma * current_hl_info['accumulated_reward']
         current_hl_info['option_length'] += 1
-
-        # Accumulate reward for the episode
-        if not treat_options_as_one_step:
-            episode_return += reward
+        episode_return += reward
 
         if done:
             # print(f"\nAt step {step}, episode is done!")
@@ -266,12 +256,6 @@ def rollout(
             
             # Store final transition for this episode
             if current_hl_info is not None:
-                # Accumulate reward for the episode, which, if treating options as
-                # one step each, means that the episode return gets incremented by
-                # the reward from the last timestep of the option
-                if treat_options_as_one_step:
-                    episode_return += current_hl_info['accumulated_reward']
-
                 hl_transitions.append({
                     'obs': current_hl_info['obs'],
                     'action': current_hl_info['action'],
