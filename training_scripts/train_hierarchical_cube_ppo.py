@@ -63,6 +63,7 @@ class Args:
     max_grad_norm: float = 0.5
     target_kl: Optional[float] = None
     episodes_per_rollout: int = 2
+    backward_discounting: bool = True
 
     # Saving
     save_dir: str = ".ogbench/ppo_runs"
@@ -244,8 +245,12 @@ def rollout(
             # Accumulate non-discounted reward across option steps
             current_hl_info['accumulated_reward'] += reward
         else:
-            # Perform backward discounting of reward across option steps
-            current_hl_info['accumulated_reward'] = reward + gamma * current_hl_info['accumulated_reward']
+            if args.backward_discounting:
+                # Perform backward discounting of reward across option steps
+                current_hl_info['accumulated_reward'] = reward + gamma * current_hl_info['accumulated_reward']
+            else:
+                # Perform forward discounting of reward across option steps
+                current_hl_info['accumulated_reward'] += (gamma ** current_hl_info['option_length']) * reward
         current_hl_info['option_length'] += 1
         episode_return += reward
 
