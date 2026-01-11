@@ -17,11 +17,46 @@ from ogbench.manipspace.oracles.hierarchical.cube_options import (
 )
 
 
-def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
-    """Initialize layer weights with orthogonal initialization."""
-    torch.nn.init.orthogonal_(layer.weight, std)
-    torch.nn.init.constant_(layer.bias, bias_const)
-    return layer
+class Actor(nn.Module):
+    """Actor network for high-level option selection."""
+
+    def __init__(self, obs_dim: int, num_actions: int, hidden_dim: int = 256, device=None):
+        super().__init__()
+        self.fc1 = nn.Linear(obs_dim, hidden_dim, device=device)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim, device=device)
+        self.fc3 = nn.Linear(hidden_dim, hidden_dim, device=device)
+        self.fc4 = nn.Linear(hidden_dim, hidden_dim, device=device)
+        self.fc_out = nn.Linear(hidden_dim, num_actions, device=device)
+
+    def forward(self, x):
+        x = nn.functional.gelu(self.fc1(x))
+        x = nn.functional.gelu(self.fc2(x))
+        x = nn.functional.gelu(self.fc3(x))
+        x = nn.functional.gelu(self.fc4(x))
+        return self.fc_out(x)
+
+
+class Critic(nn.Module):
+    """Critic network for value estimation."""
+
+    def __init__(self, obs_dim: int, hidden_dim: int = 256, device=None):
+        super().__init__()
+        self.fc1 = nn.Linear(obs_dim, hidden_dim, device=device)
+        self.ln1 = nn.LayerNorm(hidden_dim, device=device)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim, device=device)
+        self.ln2 = nn.LayerNorm(hidden_dim, device=device)
+        self.fc3 = nn.Linear(hidden_dim, hidden_dim, device=device)
+        self.ln3 = nn.LayerNorm(hidden_dim, device=device)
+        self.fc4 = nn.Linear(hidden_dim, hidden_dim, device=device)
+        self.ln4 = nn.LayerNorm(hidden_dim, device=device)
+        self.fc_out = nn.Linear(hidden_dim, 1, device=device)
+
+    def forward(self, x):
+        x = self.ln1(nn.functional.gelu(self.fc1(x)))
+        x = self.ln2(nn.functional.gelu(self.fc2(x)))
+        x = self.ln3(nn.functional.gelu(self.fc3(x)))
+        x = self.ln4(nn.functional.gelu(self.fc4(x)))
+        return self.fc_out(x)
 
 
 class PolicyNetwork(nn.Module):
@@ -29,17 +64,12 @@ class PolicyNetwork(nn.Module):
 
     def __init__(self, obs_dim: int, num_actions: int, hidden_dim: int = 256, device=None):
         super().__init__()
-        self.network = nn.Sequential(
-            layer_init(nn.Linear(obs_dim, hidden_dim, device=device)),
-            nn.Tanh(),
-            layer_init(nn.Linear(hidden_dim, hidden_dim, device=device)),
-            nn.Tanh(),
-        )
-        self.actor = layer_init(nn.Linear(hidden_dim, num_actions, device=device), std=0.01)
-        self.critic = layer_init(nn.Linear(hidden_dim, 1, device=device), std=1.0)
+        self.actor = Actor(obs_dim, num_actions, hidden_dim, device=device)
+        self.critic = Critic(obs_dim, hidden_dim, device=device)
+        print(f"Initialized PolicyNetwork with actor: {self.actor}, critic: {self.critic}")
 
     def get_value(self, obs):
-        return self.critic(self.network(obs))
+        return self.critic(obs)
 
     def get_action_and_value(self, obs, action=None, deterministic=False, temperature=1.0):
         """Get action and value from the policy.
@@ -53,19 +83,14 @@ class PolicyNetwork(nn.Module):
         Returns:
             action, log_prob, entropy, value
         """
-        hidden = self.network(obs)
-        logits = self.actor(hidden) / temperature  # If deterministic, dividing by temperature doesn't change action
+        logits = self.actor(obs) / temperature
         probs = Categorical(logits=logits)
         if action is None:
             if deterministic:
                 action = logits.argmax(dim=-1)
-                # print(f"Deterministic action: {action}")
-                # print(f"Logits: {logits}")
-                # print(f"Probs: {probs}")
             else:
                 action = probs.sample()
-                # print(f"Sampled action: {action}")
-        return action, probs.log_prob(action), probs.entropy(), self.critic(hidden)
+        return action, probs.log_prob(action), probs.entropy(), self.critic(obs)
 
 
 class LearnedHierarchicalAgent(HierarchicalAgent):

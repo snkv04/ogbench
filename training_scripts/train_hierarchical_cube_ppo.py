@@ -63,7 +63,7 @@ class Args:
     max_grad_norm: float = 0.5
     target_kl: Optional[float] = None
     episodes_per_rollout: int = 2
-    backward_discounting: bool = True
+    backward_discounting: bool = False
 
     # Saving
     save_dir: str = ".ogbench/ppo_runs"
