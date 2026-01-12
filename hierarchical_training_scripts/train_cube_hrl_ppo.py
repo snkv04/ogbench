@@ -1,4 +1,4 @@
-"""Trains a hierarchical RL agent for the cube environment using PPO."""
+"""Trains an RL agent for the cube environment using the hierarchical RL framework and the PPO algorithm."""
 
 import json
 import os

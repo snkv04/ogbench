@@ -1,7 +1,7 @@
 """
-Runs inference, and generates a dataset, using an agent trained for the cube environment.
+Runs inference, and generates a dataset, using an agent trained for the cube environment using hierarchical RL.
 
-The loaded policy can be a hierarchical agent trained with PPO or a rule-based oracle.
+The loaded policy can be trained with PPO or a rule-based oracle.
 """
 
 import pathlib
@@ -28,7 +28,7 @@ from ogbench.manipspace.oracles.hierarchical.cube_hierarchical import (
 from ogbench.manipspace.oracles.hierarchical.cube_hierarchical_random import (
     CubeHierarchicalRandom,
 )
-from training_scripts.train_hierarchical_cube_ppo import (
+from hierarchical_training_scripts.train_cube_hrl_ppo import (
     render_frame_realtime,
     init_realtime_rendering,
     cleanup_realtime_rendering,
@@ -64,7 +64,7 @@ class Args:
     # Visualization
     save_first_episode_video: bool = False
     render_realtime: bool = False
-    render_delay: float = 0.05
+    render_delay: float = 0.001
     
     # Device
     cuda: bool = True
