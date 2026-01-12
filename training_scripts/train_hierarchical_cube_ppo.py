@@ -65,11 +65,12 @@ class Args:
     episodes_per_rollout: int = 2
     backward_discounting: bool = False
 
-    # Saving
+    # Saving and loading
     save_dir: str = ".ogbench/ppo_runs"
     checkpoint_freq: int = 100
     save_model: bool = True
     run_name: str = ""
+    load_path: str = ""
 
     # Visualization
     render_realtime: bool = False
@@ -466,6 +467,38 @@ def make_env(env_id: str, seed: int, max_episode_steps: int, task_id: int):
     return env
 
 
+def save_checkpoint(
+    iteration: int,
+    global_step: int,
+    policy_network: PolicyNetwork,
+    optimizer: optim.Optimizer,
+    args: Args,
+    avg_returns: deque,
+    avg_successes: deque,
+    training_metrics: List[dict],
+    save_path: str,
+) -> None:
+    checkpoint = {
+        "iteration": iteration,
+        "global_step": global_step,
+        "model_state_dict": policy_network.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "args": vars(args),
+        # Random states for reproducibility
+        "random_state": random.getstate(),
+        "np_random_state": np.random.get_state(),
+        "torch_random_state": torch.get_rng_state(),
+        "torch_cuda_random_state": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+        # Running averages
+        "avg_returns": list(avg_returns),
+        "avg_successes": list(avg_successes),
+        # Training metrics history
+        "training_metrics": training_metrics,
+    }
+
+    torch.save(checkpoint, save_path)
+    print(f"Checkpoint saved to: {save_path}")
+
 if __name__ == "__main__":
     args = tyro.cli(Args)
     assert args.num_envs == 1, "Only one environment is supported for hierarchical PPO at the moment"
@@ -536,6 +569,48 @@ if __name__ == "__main__":
     )
     optimizer = optim.Adam(policy_network.parameters(), lr=args.learning_rate, eps=1e-5)
 
+    # Load from checkpoint if specified
+    start_iteration = 1
+    initial_global_step = 0
+    global_step = 0
+    avg_returns = deque(maxlen=100)
+    avg_successes = deque(maxlen=100)
+    training_metrics = []
+    if args.load_path:
+        if not os.path.exists(args.load_path):
+            raise FileNotFoundError(f"Checkpoint not found: {args.load_path}")
+        print(f"Loading checkpoint from: {args.load_path}")
+        checkpoint = torch.load(args.load_path, map_location=device)
+        policy_network.load_state_dict(checkpoint["model_state_dict"])
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        start_iteration = checkpoint["iteration"] + 1
+        initial_global_step = checkpoint["global_step"]
+        global_step = checkpoint["global_step"]
+        
+        # Restore random states for reproducibility
+        if "random_state" in checkpoint:
+            random.setstate(checkpoint["random_state"])
+        if "np_random_state" in checkpoint:
+            np.random.set_state(checkpoint["np_random_state"])
+        if "torch_random_state" in checkpoint:
+            torch.set_rng_state(checkpoint["torch_random_state"])
+        if "torch_cuda_random_state" in checkpoint and torch.cuda.is_available():
+            torch.cuda.set_rng_state_all(checkpoint["torch_cuda_random_state"])
+        
+        # Restore running averages
+        if "avg_returns" in checkpoint:
+            loaded_avg_returns = checkpoint["avg_returns"]
+            avg_returns.extend(loaded_avg_returns)
+        if "avg_successes" in checkpoint:
+            loaded_avg_successes = checkpoint["avg_successes"]
+            avg_successes.extend(loaded_avg_successes)
+        
+        # Restore training metrics history
+        if "training_metrics" in checkpoint:
+            training_metrics = checkpoint["training_metrics"]
+        
+        print(f"Resuming from iteration {start_iteration} (global_step={global_step})")
+
     # Hierarchical agent (holds reference to policy network)
     ob, info = env.reset(seed=args.seed)
     agent = LearnedHierarchicalAgent(
@@ -545,15 +620,9 @@ if __name__ == "__main__":
     )
     agent.reset(ob, info)
 
-    # Tracking
-    avg_returns = deque(maxlen=100)
-    avg_successes = deque(maxlen=100)
-    global_step = 0
+    # Iterates through rollouts
+    pbar = tqdm.tqdm(range(start_iteration, start_iteration + args.num_iterations), desc="Training")
     start_time = time.time()
-    training_metrics = []  # Store metrics for saving
-
-    pbar = tqdm.tqdm(range(1, args.num_iterations + 1), desc="Training")
-
     for iteration in pbar:
         # Learning rate annealing
         if args.anneal_lr:
@@ -596,7 +665,7 @@ if __name__ == "__main__":
         losses = update(policy_network, optimizer, obs, actions, logprobs, values, advantages, returns, args)
 
         # Logging
-        sps = int(global_step / (time.time() - start_time))
+        sps = int((global_step - initial_global_step) / (time.time() - start_time))
         avg_ret = np.mean(avg_returns) if avg_returns else 0
         avg_suc = np.mean(avg_successes) if avg_successes else 0
         print(
@@ -660,14 +729,17 @@ if __name__ == "__main__":
         # Save checkpoint
         if args.save_model and iteration % args.checkpoint_freq == 0:
             checkpoint_path = os.path.join(save_path, f"checkpoint_iter{iteration}.pt")
-            torch.save({
-                "iteration": iteration,
-                "global_step": global_step,
-                "model_state_dict": policy_network.state_dict(),
-                "optimizer_state_dict": optimizer.state_dict(),
-                "args": vars(args),
-            }, checkpoint_path)
-            print(f"\nSaved checkpoint to {checkpoint_path}")
+            save_checkpoint(
+                iteration=iteration,
+                global_step=global_step,
+                policy_network=policy_network,
+                optimizer=optimizer,
+                args=args,
+                avg_returns=avg_returns,
+                avg_successes=avg_successes,
+                training_metrics=training_metrics,
+                save_path=checkpoint_path
+            )
 
     # Cleanup
     env.close()
@@ -679,18 +751,22 @@ if __name__ == "__main__":
     # Save final model
     if args.save_model:
         final_model_path = os.path.join(save_path, f"final_model_iter{iteration}.pt")
-        assert iteration == args.num_iterations, "Iteration count does not match num_iterations"
-        torch.save({
-            "iteration": iteration,
-            "global_step": global_step,
-            "model_state_dict": policy_network.state_dict(),
-            "optimizer_state_dict": optimizer.state_dict(),
-            "args": vars(args),
-        }, final_model_path)
-        print(f"Saved final model (after {iteration} iterations) to {final_model_path}")
+        assert iteration == start_iteration + args.num_iterations - 1, "Iteration count mismatch"
+        save_checkpoint(
+            iteration=iteration,
+            global_step=global_step,
+            policy_network=policy_network,
+            optimizer=optimizer,
+            args=args,
+            avg_returns=avg_returns,
+            avg_successes=avg_successes,
+            training_metrics=training_metrics,
+            save_path=final_model_path
+        )
+        print(f"Final model (after {iteration} iterations) has been saved to {final_model_path}")
 
     # Save training metrics
-    metrics_path = os.path.join(save_path, "training_metrics.json")
+    metrics_path = os.path.join(save_path, f"training_metrics_iter{iteration}.json")
     with open(metrics_path, "w") as f:
         json.dump(training_metrics, f, indent=2)
     print(f"Saved training metrics to {metrics_path}")
