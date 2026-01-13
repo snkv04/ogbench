@@ -19,7 +19,7 @@ labmaze==1.0.6
 lxml==6.0.2
 mujoco==3.3.7
 numpy==2.2.6
--e file:///Users/sri/Desktop/ogbench
+-e file:///Users/sri/Desktop/ogbench  # Make sure to change this to the path of the `ogbench` repository
 opencv-python==4.12.0.88
 packaging==25.0
 pillow==12.0.0

@@ -2,7 +2,10 @@
 
 ### Environment setup commands
 
-To set up your environment to align with the output of freezing my environment:
+To set up your environment to align with the output of freezing my environment,
+first make sure that the path to the `ogbench` repository on your machine in the
+`dependencies/environment.yaml` file is updated to point to the correct location.
+Then, run:
 ```
 pip install uv
 uv venv
