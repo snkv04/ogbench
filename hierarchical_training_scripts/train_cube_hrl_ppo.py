@@ -49,7 +49,7 @@ class Args:
     total_timesteps: int = 1000000
     learning_rate: float = 1e-3
     num_envs: int = 1
-    num_steps: int = 1000
+    num_rollout_steps: int = 1000
     anneal_lr: bool = True
     gamma: float = 0.98
     gae_lambda: float = 0.95
@@ -171,7 +171,7 @@ def rollout(
     agent: LearnedHierarchicalAgent,
     ob,
     info,
-    num_steps: int,
+    num_rollout_steps: int,
     gamma: float = 0.98,
     treat_options_as_one_step: bool = False,
     render_realtime: bool = False,
@@ -192,7 +192,7 @@ def rollout(
     if render_realtime:
         render_frame_realtime(env, render_window_name, render_delay)
 
-    for step in range(num_steps):
+    for step in range(num_rollout_steps):
         # Check if we need a new high-level action
         if agent.active_option is None or not agent.active_option.active:
             # Store previous high-level transition
@@ -298,7 +298,7 @@ def rollout(
             'reward': current_hl_info['accumulated_reward'],
             'option_length': current_hl_info['option_length'],
             'start_step': current_hl_info['start_step'],
-            'end_step': num_steps - 1,  # Current option ended on last step of rollout
+            'end_step': num_rollout_steps - 1,  # Current option ended on last step of rollout
             'done': False,
         })
 
@@ -504,14 +504,14 @@ if __name__ == "__main__":
     assert args.num_envs == 1, "Only one environment is supported for hierarchical PPO at the moment"
 
     # Compute derived values
-    args.episodes_per_rollout = args.num_steps // args.max_episode_steps
+    args.episodes_per_rollout = args.num_rollout_steps // args.max_episode_steps
     assert args.episodes_per_rollout > 0, "Cannot have episodes last longer than rollouts"
-    if args.num_steps % args.max_episode_steps != 0:
-        print(f"WARNING: num_steps ({args.num_steps} steps per rollout) is not divisible by max_episode_steps ({args.max_episode_steps}). "
+    if args.num_rollout_steps % args.max_episode_steps != 0:
+        print(f"WARNING: num_rollout_steps ({args.num_rollout_steps}) is not divisible by max_episode_steps ({args.max_episode_steps}). "
               f"Each rollout will have {args.max_episode_steps * args.episodes_per_rollout} steps instead "
-              f"({(args.num_steps - args.max_episode_steps * args.episodes_per_rollout)} fewer).")
-        args.num_steps = args.max_episode_steps * args.episodes_per_rollout
-    args.batch_size = int(args.num_envs * args.num_steps)
+              f"({(args.num_rollout_steps - args.max_episode_steps * args.episodes_per_rollout)} fewer).")
+        args.num_rollout_steps = args.max_episode_steps * args.episodes_per_rollout
+    args.batch_size = int(args.num_envs * args.num_rollout_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     args.num_iterations = args.total_timesteps // args.batch_size
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -631,14 +631,14 @@ if __name__ == "__main__":
 
         # Collect rollout
         transitions, episode_stats, ob, info = rollout(
-            env, agent, ob, info, args.num_steps,
+            env, agent, ob, info, args.num_rollout_steps,
             gamma=args.gamma,
             treat_options_as_one_step=args.treat_options_as_one_step,
             render_realtime=args.render_realtime,
             render_window_name=render_window_name,
             render_delay=args.render_delay,
         )
-        global_step += args.num_steps
+        global_step += args.num_rollout_steps
 
         # Track episode stats
         for stat in episode_stats:
@@ -698,7 +698,7 @@ if __name__ == "__main__":
         if args.track_with_wandb:
             # Log individual episode returns
             for i, stat in enumerate(episode_stats):
-                prev_global_step = global_step - args.num_steps
+                prev_global_step = global_step - args.num_rollout_steps
                 episode_step = prev_global_step + (i + 1) * args.max_episode_steps
                 wandb.log({
                     f"charts/episode_returns": stat['return'],
@@ -772,5 +772,5 @@ if __name__ == "__main__":
     print(f"Saved training metrics to {metrics_path}")
 
     print(f"\nTraining complete!")
-    print(f"Final average return: {np.mean(avg_returns):.2f}")
-    print(f"Final success rate: {np.mean(avg_successes):.2%}")
+    print(f"Final average return across episodes: {np.mean(avg_returns):.2f}")
+    print(f"Final success rate across episodes: {np.mean(avg_successes):.2%}")
