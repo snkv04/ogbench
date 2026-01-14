@@ -49,11 +49,11 @@ class Args:
     total_timesteps: int = 1000000
     learning_rate: float = 1e-3
     num_envs: int = 1
-    num_steps: int = 2048
+    num_steps: int = 1000
     anneal_lr: bool = True
     gamma: float = 0.98
     gae_lambda: float = 0.95
-    num_minibatches: int = 32
+    num_minibatches: int = 20
     update_epochs: int = 10
     norm_adv: bool = True
     clip_coef: float = 0.2
@@ -62,7 +62,7 @@ class Args:
     vf_coef: float = 0.5
     max_grad_norm: float = 0.5
     target_kl: Optional[float] = None
-    episodes_per_rollout: int = 2
+    max_episode_steps: int = 200
     backward_discounting: bool = False
 
     # Saving and loading
@@ -80,7 +80,7 @@ class Args:
     batch_size: int = 0
     minibatch_size: int = 0
     num_iterations: int = 0
-    max_episode_steps: int = 0
+    episodes_per_rollout: int = 0
 
 
 def add_text_overlay(
@@ -504,10 +504,10 @@ if __name__ == "__main__":
     assert args.num_envs == 1, "Only one environment is supported for hierarchical PPO at the moment"
 
     # Compute derived values
-    args.max_episode_steps = args.num_steps // args.episodes_per_rollout
-    assert args.max_episode_steps > 0, "Cannot have more episodes than steps in each rollout"
-    if args.num_steps % args.episodes_per_rollout != 0:
-        print(f"WARNING: num_steps ({args.num_steps} steps per rollout) is not divisible by episodes_per_rollout ({args.episodes_per_rollout}). "
+    args.episodes_per_rollout = args.num_steps // args.max_episode_steps
+    assert args.episodes_per_rollout > 0, "Cannot have episodes last longer than rollouts"
+    if args.num_steps % args.max_episode_steps != 0:
+        print(f"WARNING: num_steps ({args.num_steps} steps per rollout) is not divisible by max_episode_steps ({args.max_episode_steps}). "
               f"Each rollout will have {args.max_episode_steps * args.episodes_per_rollout} steps instead "
               f"({(args.num_steps - args.max_episode_steps * args.episodes_per_rollout)} fewer).")
         args.num_steps = args.max_episode_steps * args.episodes_per_rollout
