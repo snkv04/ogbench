@@ -1,8 +1,4 @@
-"""
-Runs inference, and generates a dataset, using an agent trained for the cube environment using hierarchical RL.
-
-The loaded policy can be trained with PPO or a rule-based oracle.
-"""
+"""Runs inference, and generates a dataset, using a hierarchical RL agent in the cube environment."""
 
 import pathlib
 from collections import defaultdict
@@ -32,6 +28,12 @@ from hierarchical_training_scripts.train_cube_hrl_ppo import (
     render_frame_realtime,
     init_realtime_rendering,
     cleanup_realtime_rendering,
+)
+from hierarchical_training_scripts.train_cube_hrl_dqn import (
+    QNetwork,
+    HierarchicalDQNAgent,
+)
+from ogbench.manipspace.oracles.hierarchical.utils import (
     add_text_overlay,
 )
 
@@ -39,10 +41,15 @@ from hierarchical_training_scripts.train_cube_hrl_ppo import (
 @dataclass
 class Args:
     # Agent type
-    agent_type: Literal["hierarchical_ppo", "hierarchical_oracle", "hierarchical_random"] = "hierarchical_ppo"
-    checkpoint_path: str = ""  # Path to checkpoint file (required for hierarchical_ppo)
-    deterministic: bool = False  # If True, use argmax instead of sampling
+    agent_type: Literal["hierarchical_ppo", "hierarchical_dqn", "hierarchical_oracle", "hierarchical_random"] = "hierarchical_ppo"
+    checkpoint_path: str = ""  # Path to checkpoint file (required for hierarchical_ppo and hierarchical_dqn)
+    
+    # PPO-specific parameters (ignored for DQN, oracle, and random agents)
+    deterministic: bool = False  # If True, use argmax; if False, sample from policy
     temperature: float = 1.0  # Temperature for sampling (higher = more random)
+
+    # DQN-specific parameters (ignored for PPO, oracle, and random agents)
+    end_e: float = 0.05  # Final epsilon-greedy exploration rate from training
 
     # Agent-specific arguments
     disable_no_op: bool = False
@@ -55,7 +62,7 @@ class Args:
     
     # Dataset generation
     num_episodes: int = 1000
-    max_episode_steps: int = 1024
+    max_episode_steps: int = 200
     save_path: Optional[str] = None  # If None, auto-generated
     
     # Action noise (optional, for diversity)
@@ -119,26 +126,40 @@ def save_episode_video(
 def main():
     args = tyro.cli(Args)
     
-    if args.agent_type == "hierarchical_ppo":
-        assert args.checkpoint_path, "Must provide --checkpoint_path for hierarchical_ppo agent"
+    if args.agent_type in ["hierarchical_ppo", "hierarchical_dqn"]:
+        assert args.checkpoint_path, f"Must provide --checkpoint_path for {args.agent_type} agent"
     
     # Set save path
     if args.save_path is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        policy_type = "deterministic" if args.deterministic else f"temp{args.temperature}"
+        if args.agent_type == "hierarchical_ppo":
+            # PPO uses deterministic flag and temperature
+            policy_type = "deterministic" if args.deterministic else f"temp{args.temperature}"
+        elif args.agent_type == "hierarchical_dqn":
+            policy_type = f"eps{args.end_e}"
+        elif args.agent_type == "hierarchical_oracle":
+            policy_type = "oracle"
+        elif args.agent_type == "hierarchical_random":
+            policy_type = "random"
+        else:
+            raise ValueError(f"Invalid agent type: {args.agent_type}")
         args.save_path = f".ogbench/data/{args.env_name}-{args.agent_type}-task{args.task_id}-{policy_type}-{timestamp}.npz"
     
     # Device
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
-    if args.agent_type == "hierarchical_ppo":
+    if args.agent_type in ["hierarchical_ppo", "hierarchical_dqn"]:
         print(f"Using device: {device}")
     
-    # Load checkpoint (only for PPO agent)
+    # Load checkpoint (for PPO and DQN agents)
     checkpoint = None
     if args.agent_type == "hierarchical_ppo":
-        print(f"Loading checkpoint from: {args.checkpoint_path}")
+        print(f"Loading PPO checkpoint from: {args.checkpoint_path}")
         checkpoint = torch.load(args.checkpoint_path, map_location=device, weights_only=False)
         print(f"Checkpoint trained for {checkpoint['iteration']} iterations, {checkpoint['global_step']} steps")
+    elif args.agent_type == "hierarchical_dqn":
+        print(f"Loading DQN checkpoint from: {args.checkpoint_path}")
+        checkpoint = torch.load(args.checkpoint_path, map_location=device, weights_only=False)
+        print(f"Checkpoint trained for {checkpoint['global_step']} steps")
     
     # Initialize environment in task mode with fixed task
     env = gymnasium.make(
@@ -171,6 +192,22 @@ def main():
             disable_no_op=args.disable_no_op,
             no_op_duration=args.no_op_duration,
         )
+    elif args.agent_type == "hierarchical_dqn":
+        # Initialize Q-network
+        num_options = 10 if not args.disable_no_op else 9
+        obs_dim = HierarchicalDQNAgent.OBS_DIM
+        q_network = QNetwork(obs_dim, num_options, hidden_dim=256)
+        q_network.to(device)
+        q_network.load_state_dict(checkpoint['q_network_state_dict'])
+        q_network.eval()
+        print("Q-network loaded successfully")
+        
+        agent = HierarchicalDQNAgent(
+            env, q_network, device,
+            disable_no_op=args.disable_no_op,
+            no_op_duration=args.no_op_duration,
+        )
+        agent.epsilon = args.end_e
     elif args.agent_type == "hierarchical_oracle":
         agent = CubeHierarchicalOracle(
             env=env,
@@ -212,7 +249,9 @@ def main():
     print(f"  Agent type: {args.agent_type}")
     print(f"  Train: {num_train_episodes}, Val: {num_val_episodes}")
     if args.agent_type == "hierarchical_ppo":
-        print(f"  Deterministic: {args.deterministic}, Temperature: {args.temperature}")
+        print(f"  PPO Policy: {'Deterministic (argmax)' if args.deterministic else f'Stochastic (temperature={args.temperature})'}")
+    elif args.agent_type == "hierarchical_dqn":
+        print(f"  DQN Policy: Epsilon-greedy (epsilon={args.end_e})")
     print(f"  Action noise: {args.noise}")
     
     for ep_idx in trange(num_train_episodes + num_val_episodes):
@@ -319,12 +358,15 @@ def main():
     # Print statistics
     total_episodes = num_train_episodes + num_val_episodes
     print(f'\n=== Statistics ===')
-    temperature_str = ""
+    policy_str = ""
     if args.agent_type == "hierarchical_ppo":
-        temperature_str = f"deterministic" if args.deterministic else f"temperature {args.temperature}"
-        temperature_str = f"({temperature_str})"
-    print(f'Agent type: {args.agent_type} {temperature_str}')
-    print(f'Checkpoint path: {args.checkpoint_path}')
+        # PPO-specific: deterministic vs stochastic with temperature
+        policy_str = "(PPO: deterministic)" if args.deterministic else f"(PPO: stochastic, temp={args.temperature})"
+    elif args.agent_type == "hierarchical_dqn":
+        policy_str = f"(DQN: epsilon-greedy, epsilon={args.end_e})"
+    print(f'Agent type: {args.agent_type} {policy_str}')
+    if args.checkpoint_path:
+        print(f'Checkpoint path: {args.checkpoint_path}')
     print(f'Total steps: {total_steps}')
     print(f'Total episodes: {total_episodes}')
     print(f'Success rate (tasks completed at end of episode): {tasks_completed_at_end}/{tasks_attempted} ({100*tasks_completed_at_end/tasks_attempted:.1f}%)')

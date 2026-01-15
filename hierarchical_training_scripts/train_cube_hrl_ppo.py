@@ -25,12 +25,18 @@ from ogbench.manipspace.oracles.hierarchical.learned_hierarchical_agent import (
     PolicyNetwork,
     LearnedHierarchicalAgent,
 )
-
+from ogbench.manipspace.oracles.hierarchical.utils import (
+    render_frame_realtime,
+    init_realtime_rendering,
+    cleanup_realtime_rendering,
+    make_manipspace_env,
+)
 torch.set_float32_matmul_precision("high")
 
 
 @dataclass
 class Args:
+    # General setup
     seed: int = 1048596
     torch_deterministic: bool = True
     cuda: bool = True
@@ -41,7 +47,7 @@ class Args:
     # Agent-specific arguments
     disable_no_op: bool = False
     no_op_duration: int = 10
-    treat_options_as_one_step: bool = False  # If True, option reward = last step reward, GAE uses single-step discounting
+    treat_options_as_one_step: bool = False  # If True, option reward = last step reward, and GAE uses single-step discounting
 
     # Algorithm-specific arguments
     env_id: str = "cube-single-v0"
@@ -81,89 +87,6 @@ class Args:
     minibatch_size: int = 0
     num_iterations: int = 0
     episodes_per_rollout: int = 0
-
-
-def add_text_overlay(
-    frame: np.ndarray,
-    option_idx: Optional[int] = None,
-    option_text: Optional[str] = None,
-    font_scale: float = 0.5,
-    thickness: int = 2,
-) -> np.ndarray:
-    """Add HRL option info as text overlay on frame.
-    
-    Args:
-        frame: RGB frame (numpy array).
-        option_idx: Option index to display.
-        option_text: Option name/description to display.
-        font_scale: Font scale for text.
-        thickness: Thickness of text.
-    
-    Returns:
-        Frame with text overlay (copy of original).
-    """
-    if option_idx is None and option_text is None:
-        return frame
-    
-    frame = frame.copy()  # Don't modify original
-    
-    # Build text string
-    if option_idx is not None and option_text is not None:
-        text = f"Option {option_idx}: {option_text}"
-    elif option_idx is not None:
-        text = f"Option {option_idx}"
-    else:
-        text = option_text
-    
-    # Draw text with black outline for visibility
-    position = (10, 30)
-    cv2.putText(frame, text, position, cv2.FONT_HERSHEY_SIMPLEX, 
-                font_scale, (0, 0, 0), thickness + 2)  # Black outline
-    cv2.putText(frame, text, position, cv2.FONT_HERSHEY_SIMPLEX,
-                font_scale, (255, 255, 255), thickness)  # White text
-    
-    return frame
-
-
-def render_frame_realtime(
-    env,
-    window_name: str,
-    delay: float,
-    option_idx: Optional[int] = None,
-    option_text: Optional[str] = None,
-):
-    """Render a frame in real-time using OpenCV.
-    
-    Args:
-        env: The gymnasium environment.
-        window_name: Name of the OpenCV window.
-        delay: Time to sleep after rendering (seconds).
-        option_idx: Optional option index to display as overlay.
-        option_text: Optional option name to display as overlay.
-    """
-    frame = env.render()
-    frame = add_text_overlay(frame, option_idx, option_text)
-    frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-    cv2.imshow(window_name, frame_bgr)
-    cv2.waitKey(1)
-    time.sleep(delay)
-
-
-def init_realtime_rendering(window_name: str, width: int = 2000, height: int = 2000):
-    """Initialize OpenCV window for real-time rendering.
-    
-    Args:
-        window_name: Name of the OpenCV window.
-        width: Window width in pixels.
-        height: Window height in pixels.
-    """
-    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(window_name, width, height)
-
-
-def cleanup_realtime_rendering():
-    """Cleanup OpenCV windows."""
-    cv2.destroyAllWindows()
 
 
 def rollout(
@@ -454,19 +377,6 @@ def update(
     }
 
 
-def make_env(env_id: str, seed: int, max_episode_steps: int, task_id: int):
-    env = gym.make(
-        env_id,
-        mode='task',
-        terminate_at_goal=False,
-        max_episode_steps=max_episode_steps,
-        reward_task_id=task_id,  # Fixed task for all episodes
-    )
-    env.action_space.seed(seed)
-    env.observation_space.seed(seed)
-    return env
-
-
 def save_checkpoint(
     iteration: int,
     global_step: int,
@@ -548,11 +458,12 @@ if __name__ == "__main__":
     torch.manual_seed(args.seed)
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
+    # Sets device
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
     print(f"Using device: {device}")
 
     # Environment setup
-    env = make_env(args.env_id, args.seed, args.max_episode_steps, args.task_id)
+    env = make_manipspace_env(args.env_id, args.seed, args.max_episode_steps, args.task_id)
     print(f"Using fixed task_id={args.task_id} for all episodes")
 
     # Initialize real-time rendering if enabled
@@ -609,6 +520,7 @@ if __name__ == "__main__":
         if "training_metrics" in checkpoint:
             training_metrics = checkpoint["training_metrics"]
         
+        print("Finished loading checkpoint")
         print(f"Resuming from iteration {start_iteration} (global_step={global_step})")
 
     # Hierarchical agent (holds reference to policy network)
