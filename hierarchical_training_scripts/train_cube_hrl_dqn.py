@@ -94,8 +94,8 @@ def save_checkpoint(
     target_network: QNetwork,
     optimizer: optim.Optimizer,
     args: Args,
-    avg_returns: deque,
-    avg_successes: deque,
+    episode_returns: deque,
+    episode_successes: deque,
     training_metrics: List[dict],
     save_path: str,
 ) -> None:
@@ -111,8 +111,8 @@ def save_checkpoint(
         "torch_random_state": torch.get_rng_state(),
         "torch_cuda_random_state": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
         # Running averages
-        "avg_returns": list(avg_returns),
-        "avg_successes": list(avg_successes),
+        "episode_returns": list(episode_returns),
+        "episode_successes": list(episode_successes),
         # Training metrics history
         "training_metrics": training_metrics,
     }
@@ -210,8 +210,8 @@ poetry run pip install "stable_baselines3==2.0.0a1"
 
     # Load from checkpoint if specified
     start_global_step = 0
-    avg_returns = deque(maxlen=100)
-    avg_successes = deque(maxlen=100)
+    episode_returns = deque(maxlen=100)
+    episode_successes = deque(maxlen=100)
     training_metrics = []
     if args.load_path:
         if not os.path.exists(args.load_path):
@@ -234,10 +234,10 @@ poetry run pip install "stable_baselines3==2.0.0a1"
             torch.cuda.set_rng_state_all(checkpoint["torch_cuda_random_state"])
         
         # Restore running averages
-        if "avg_returns" in checkpoint:
-            avg_returns.extend(checkpoint["avg_returns"])
-        if "avg_successes" in checkpoint:
-            avg_successes.extend(checkpoint["avg_successes"])
+        if "episode_returns" in checkpoint:
+            episode_returns.extend(checkpoint["episode_returns"])
+        if "episode_successes" in checkpoint:
+            episode_successes.extend(checkpoint["episode_successes"])
         
         # Restore training metrics history
         if "training_metrics" in checkpoint:
@@ -340,8 +340,8 @@ poetry run pip install "stable_baselines3==2.0.0a1"
             current_hl_info = None
 
             # Track episode stats
-            avg_returns.append(episode_return)
-            avg_successes.append(float(next_info['success']))
+            episode_returns.append(episode_return)
+            episode_successes.append(float(next_info['success']))
             episode_return = 0.0
             episode_step_count = 0
 
@@ -384,17 +384,17 @@ poetry run pip install "stable_baselines3==2.0.0a1"
         if global_step % 100 == 0 and start_time is not None:
             # Compute metrics
             speed = (global_step - start_burnin_global_step) / (time.time() - start_time)
-            avg_ret = np.mean(avg_returns) if avg_returns else 0
-            avg_suc = np.mean(avg_successes) if avg_successes else 0
-            desc = f"speed: {speed:4.2f} sps, return: {avg_ret:.2f}, success: {avg_suc:.2%}"
+            avg_return = np.mean(episode_returns) if episode_returns else 0
+            avg_success = np.mean(episode_successes) if episode_successes else 0
+            desc = f"speed: {speed:4.2f} sps, return: {avg_return:.2f}, success: {avg_success:.2%}"
             pbar.set_description(desc)
             
             # Track metrics
             metrics = {
                 "global_step": global_step,
                 "speed": float(speed),
-                "avg_episode_return": float(avg_ret),
-                "success_rate": float(avg_suc),
+                "avg_episode_return": float(avg_return),
+                "success_rate": float(avg_success),
                 "epsilon": float(epsilon),
             }
             if global_step > args.learning_starts:
@@ -414,8 +414,8 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                 target_network=target_network,
                 optimizer=optimizer,
                 args=args,
-                avg_returns=avg_returns,
-                avg_successes=avg_successes,
+                episode_returns=episode_returns,
+                episode_successes=episode_successes,
                 training_metrics=training_metrics,
                 save_path=checkpoint_path
             )
@@ -436,8 +436,8 @@ poetry run pip install "stable_baselines3==2.0.0a1"
             target_network=target_network,
             optimizer=optimizer,
             args=args,
-            avg_returns=avg_returns,
-            avg_successes=avg_successes,
+            episode_returns=episode_returns,
+            episode_successes=episode_successes,
             training_metrics=training_metrics,
             save_path=final_model_path
         )
@@ -451,5 +451,5 @@ poetry run pip install "stable_baselines3==2.0.0a1"
 
     # Final logging
     print(f"\nTraining complete!")
-    print(f"Final average return across episodes: {np.mean(avg_returns):.2f}")
-    print(f"Final success rate across episodes: {np.mean(avg_successes):.2%}")
+    print(f"Final average return across episodes: {np.mean(episode_returns):.2f}")
+    print(f"Final success rate across episodes: {np.mean(episode_successes):.2%}")

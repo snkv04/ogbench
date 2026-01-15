@@ -383,8 +383,8 @@ def save_checkpoint(
     policy_network: PolicyNetwork,
     optimizer: optim.Optimizer,
     args: Args,
-    avg_returns: deque,
-    avg_successes: deque,
+    episode_returns: deque,
+    episode_successes: deque,
     training_metrics: List[dict],
     save_path: str,
 ) -> None:
@@ -400,8 +400,8 @@ def save_checkpoint(
         "torch_random_state": torch.get_rng_state(),
         "torch_cuda_random_state": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
         # Running averages
-        "avg_returns": list(avg_returns),
-        "avg_successes": list(avg_successes),
+        "episode_returns": list(episode_returns),
+        "episode_successes": list(episode_successes),
         # Training metrics history
         "training_metrics": training_metrics,
     }
@@ -484,8 +484,8 @@ if __name__ == "__main__":
     start_iteration = 1
     initial_global_step = 0
     global_step = 0
-    avg_returns = deque(maxlen=100)
-    avg_successes = deque(maxlen=100)
+    episode_returns = deque(maxlen=100)
+    episode_successes = deque(maxlen=100)
     training_metrics = []
     if args.load_path:
         if not os.path.exists(args.load_path):
@@ -509,12 +509,12 @@ if __name__ == "__main__":
             torch.cuda.set_rng_state_all(checkpoint["torch_cuda_random_state"])
         
         # Restore running averages
-        if "avg_returns" in checkpoint:
-            loaded_avg_returns = checkpoint["avg_returns"]
-            avg_returns.extend(loaded_avg_returns)
-        if "avg_successes" in checkpoint:
-            loaded_avg_successes = checkpoint["avg_successes"]
-            avg_successes.extend(loaded_avg_successes)
+        if "episode_returns" in checkpoint:
+            loaded_episode_returns = checkpoint["episode_returns"]
+            episode_returns.extend(loaded_episode_returns)
+        if "episode_successes" in checkpoint:
+            loaded_episode_successes = checkpoint["episode_successes"]
+            episode_successes.extend(loaded_episode_successes)
         
         # Restore training metrics history
         if "training_metrics" in checkpoint:
@@ -554,8 +554,8 @@ if __name__ == "__main__":
 
         # Track episode stats
         for stat in episode_stats:
-            avg_returns.append(stat['return'])
-            avg_successes.append(float(stat['success']))
+            episode_returns.append(stat['return'])
+            episode_successes.append(float(stat['success']))
 
         # Skip update if insufficient transitions
         if len(transitions) < 2:
@@ -578,10 +578,10 @@ if __name__ == "__main__":
 
         # Logging
         sps = int((global_step - initial_global_step) / (time.time() - start_time))
-        avg_ret = np.mean(avg_returns) if avg_returns else 0
-        avg_suc = np.mean(avg_successes) if avg_successes else 0
+        avg_return = np.mean(episode_returns) if episode_returns else 0
+        avg_success = np.mean(episode_successes) if episode_successes else 0
         print(
-            f"Steps per second: {sps}, Return: {avg_ret:.2f}, Success: {avg_suc:.2%}, "
+            f"Steps per second: {sps}, Return: {avg_return:.2f}, Success: {avg_success:.2%}, "
             f"High-level transitions: {len(transitions)}, Loss: {losses['pg_loss']:.4f}"
         )
         
@@ -590,9 +590,9 @@ if __name__ == "__main__":
             "iteration": iteration,
             "global_step": global_step,
             "sps": sps,
-            "avg_episode_return": float(avg_ret),
+            "avg_episode_return": float(avg_return),
             "episode_returns": [stat['return'] for stat in episode_stats],  # Individual episode returns
-            "success_rate": float(avg_suc),
+            "success_rate": float(avg_success),
             "learning_rate": optimizer.param_groups[0]["lr"],
             "policy_loss": float(losses['pg_loss']),
             "value_loss": float(losses['v_loss']),
@@ -620,8 +620,8 @@ if __name__ == "__main__":
             wandb.log({
                 # (Time)steps per second
                 "charts/SPS": sps,
-                "charts/avg_episode_return": avg_ret,
-                "charts/success_rate": avg_suc,
+                "charts/avg_episode_return": avg_return,
+                "charts/success_rate": avg_success,
                 "charts/learning_rate": optimizer.param_groups[0]["lr"],
                 "losses/policy_loss": losses['pg_loss'],
                 "losses/value_loss": losses['v_loss'],
@@ -647,8 +647,8 @@ if __name__ == "__main__":
                 policy_network=policy_network,
                 optimizer=optimizer,
                 args=args,
-                avg_returns=avg_returns,
-                avg_successes=avg_successes,
+                episode_returns=episode_returns,
+                episode_successes=episode_successes,
                 training_metrics=training_metrics,
                 save_path=checkpoint_path
             )
@@ -670,8 +670,8 @@ if __name__ == "__main__":
             policy_network=policy_network,
             optimizer=optimizer,
             args=args,
-            avg_returns=avg_returns,
-            avg_successes=avg_successes,
+            episode_returns=episode_returns,
+            episode_successes=episode_successes,
             training_metrics=training_metrics,
             save_path=final_model_path
         )
@@ -684,5 +684,5 @@ if __name__ == "__main__":
     print(f"Saved training metrics to {metrics_path}")
 
     print(f"\nTraining complete!")
-    print(f"Final average return across episodes: {np.mean(avg_returns):.2f}")
-    print(f"Final success rate across episodes: {np.mean(avg_successes):.2%}")
+    print(f"Final average return across episodes: {np.mean(episode_returns):.2f}")
+    print(f"Final success rate across episodes: {np.mean(episode_successes):.2%}")
