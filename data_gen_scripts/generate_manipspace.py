@@ -18,7 +18,7 @@ from ogbench.manipspace.oracles.plan.button_plan import ButtonPlanOracle
 from ogbench.manipspace.oracles.plan.cube_plan import CubePlanOracle
 from ogbench.manipspace.oracles.plan.drawer_plan import DrawerPlanOracle
 from ogbench.manipspace.oracles.plan.window_plan import WindowPlanOracle
-from ogbench.manipspace.oracles.hierarchical.cube_hierarchical import CubeHierarchicalOracle
+from ogbench.manipspace.oracles.hierarchical.cube_hierarchical_oracle import CubeHierarchicalOracle
 
 FLAGS = flags.FLAGS
 

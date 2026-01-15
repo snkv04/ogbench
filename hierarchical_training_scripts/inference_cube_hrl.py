@@ -18,7 +18,7 @@ from hierarchical_training_scripts.hierarchical_ppo_agent import (
     PolicyNetwork,
     HierarchicalPPOAgent,
 )
-from ogbench.manipspace.oracles.hierarchical.cube_hierarchical import (
+from ogbench.manipspace.oracles.hierarchical.cube_hierarchical_oracle import (
     CubeHierarchicalOracle,
 )
 from ogbench.manipspace.oracles.hierarchical.cube_hierarchical_random import (

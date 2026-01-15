@@ -1,6 +1,6 @@
 import random
 
-from ogbench.manipspace.oracles.hierarchical.cube_hierarchical import CubeHierarchicalOracle
+from ogbench.manipspace.oracles.hierarchical.cube_hierarchical_oracle import CubeHierarchicalOracle
 
 
 class CubeHierarchicalRandom(CubeHierarchicalOracle):

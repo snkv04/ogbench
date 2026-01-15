@@ -138,6 +138,6 @@ class LearnedHierarchicalOracle(HierarchicalAgent):
 - `option.py`: Base Option class
 - `hierarchical_agent.py`: Base HierarchicalAgent class
 - `cube_options.py`: Example options for cube manipulation
-- `cube_hierarchical.py`: Example hierarchical oracle for cube task
+- `cube_hierarchical_oracle.py`: Example hierarchical oracle for cube task
 - `generate_manipspace_hierarchical.py`: Example execution script
 

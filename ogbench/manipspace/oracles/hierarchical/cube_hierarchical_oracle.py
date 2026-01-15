@@ -324,4 +324,3 @@ class CubeHierarchicalOracle(HierarchicalAgent):
         self._done = final_pos_aligned
             
         return action
-
