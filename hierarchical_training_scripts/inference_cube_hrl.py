@@ -29,7 +29,7 @@ from hierarchical_training_scripts.train_cube_hrl_ppo import (
     init_realtime_rendering,
     cleanup_realtime_rendering,
 )
-from hierarchical_training_scripts.train_cube_hrl_dqn import (
+from hierarchical_training_scripts.hierarchical_dqn_agent import (
     QNetwork,
     HierarchicalDQNAgent,
 )
