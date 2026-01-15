@@ -93,7 +93,7 @@ class PolicyNetwork(nn.Module):
         return action, probs.log_prob(action), probs.entropy(), self.critic(obs)
 
 
-class LearnedHierarchicalAgent(HierarchicalAgent):
+class HierarchicalPPOAgent(HierarchicalAgent):
     """Hierarchical agent with a learned high-level policy for option selection.
     
     This agent uses a neural network (PolicyNetwork) to select which option to execute,

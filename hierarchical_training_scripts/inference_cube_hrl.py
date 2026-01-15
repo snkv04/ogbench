@@ -14,9 +14,9 @@ import tyro
 from tqdm import trange
 
 import ogbench.manipspace  # noqa
-from ogbench.manipspace.oracles.hierarchical.learned_hierarchical_agent import (
+from hierarchical_training_scripts.hierarchical_ppo_agent import (
     PolicyNetwork,
-    LearnedHierarchicalAgent,
+    HierarchicalPPOAgent,
 )
 from ogbench.manipspace.oracles.hierarchical.cube_hierarchical import (
     CubeHierarchicalOracle,
@@ -176,7 +176,7 @@ def main():
     if args.agent_type == "hierarchical_ppo":
         # Initialize policy network
         policy_network = PolicyNetwork(
-            LearnedHierarchicalAgent.OBS_DIM,
+            HierarchicalPPOAgent.OBS_DIM,
             10 if not args.disable_no_op else 9,
             hidden_dim=256,
             device=device,
@@ -185,7 +185,7 @@ def main():
         policy_network.eval()
         print("Policy network loaded successfully")
         
-        agent = LearnedHierarchicalAgent(
+        agent = HierarchicalPPOAgent(
             env, policy_network, device,
             deterministic=args.deterministic,
             temperature=args.temperature,

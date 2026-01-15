@@ -21,9 +21,9 @@ import tqdm
 import tyro
 
 import ogbench.manipspace  # Register environments
-from ogbench.manipspace.oracles.hierarchical.learned_hierarchical_agent import (
+from hierarchical_training_scripts.hierarchical_ppo_agent import (
     PolicyNetwork,
-    LearnedHierarchicalAgent,
+    HierarchicalPPOAgent,
 )
 from ogbench.manipspace.oracles.hierarchical.utils import (
     render_frame_realtime,
@@ -91,7 +91,7 @@ class Args:
 
 def rollout(
     env,
-    agent: LearnedHierarchicalAgent,
+    agent: HierarchicalPPOAgent,
     ob,
     info,
     num_rollout_steps: int,
@@ -473,7 +473,7 @@ if __name__ == "__main__":
 
     # Policy network (owned by script, shared with agent)
     policy_network = PolicyNetwork(
-        LearnedHierarchicalAgent.OBS_DIM,
+        HierarchicalPPOAgent.OBS_DIM,
         10 if not args.disable_no_op else 9,
         hidden_dim=256,
         device=device,
@@ -525,7 +525,7 @@ if __name__ == "__main__":
 
     # Hierarchical agent (holds reference to policy network)
     ob, info = env.reset(seed=args.seed)
-    agent = LearnedHierarchicalAgent(
+    agent = HierarchicalPPOAgent(
         env, policy_network, device,
         disable_no_op=args.disable_no_op,
         no_op_duration=args.no_op_duration,
