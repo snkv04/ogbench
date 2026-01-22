@@ -35,6 +35,7 @@ from hierarchical_training_scripts.hierarchical_dqn_agent import (
 )
 from ogbench.manipspace.oracles.hierarchical.utils import (
     add_text_overlay,
+    save_episode_video,
 )
 
 
@@ -83,44 +84,6 @@ def task_done(env, info, threshold: float = 0.04) -> bool:
     target_pos = env.unwrapped.cur_task_info['goal_xyzs'][target_block]
     block_pos = info[f'privileged/block_{target_block}_pos']
     return np.linalg.norm(target_pos - block_pos) <= threshold
-
-
-def save_episode_video(
-    frames: List[np.ndarray],
-    save_dir: str,
-    filename: str,
-    fps: int = 30,
-) -> str:
-    """Save episode frames as a video file.
-    
-    Args:
-        frames: List of RGB frames (numpy arrays).
-        save_dir: Directory to save the video in.
-        filename: Name of the video file (without extension).
-        fps: Frames per second.
-    
-    Returns:
-        Full path to the saved video.
-    """
-    if not frames:
-        return ""
-    
-    save_path = pathlib.Path(save_dir)
-    save_path.mkdir(parents=True, exist_ok=True)
-    video_path = save_path / f"{filename}.mp4"
-    
-    with imageio.get_writer(
-        video_path.as_posix(),
-        fps=fps,
-        codec='libx264',
-        quality=8,
-        macro_block_size=None,
-    ) as writer:
-        for frame in frames:
-            writer.append_data(frame)
-    
-    print(f"Saved video to: {video_path.as_posix()}")
-    return video_path.as_posix()
 
 
 def main():

@@ -2,6 +2,7 @@
 
 import json
 import os
+import pathlib
 import random
 import time
 from datetime import datetime
@@ -11,6 +12,7 @@ from typing import List, Optional, Tuple
 
 import cv2
 import gymnasium as gym
+import imageio.v2 as imageio
 from loguru import logger as logging
 import numpy as np
 import torch
@@ -31,6 +33,8 @@ from ogbench.manipspace.oracles.hierarchical.utils import (
     init_realtime_rendering,
     cleanup_realtime_rendering,
     make_manipspace_env,
+    add_text_overlay,
+    save_episode_video,
 )
 from hierarchical_training_scripts.inference_cube_hrl import task_done
 
@@ -80,6 +84,7 @@ class Args:
     save_model: bool = True
     run_name: str = ""
     load_path: str = ""
+    save_first_episode_video: bool = False
 
     # Visualization
     render_realtime: bool = False
@@ -132,6 +137,9 @@ def run_validation_episodes(
     agent,
     num_episodes: int,
     max_episode_steps: int,
+    save_first_episode_video: bool = False,
+    save_dir: Optional[str] = None,
+    video_prefix: str = "validation",
 ) -> dict:
     """Run validation episodes and compute metrics.
     
@@ -140,6 +148,9 @@ def run_validation_episodes(
         agent: The hierarchical agent (PPO or DQN) to use for action selection.
         num_episodes: Number of validation episodes to run.
         max_episode_steps: Maximum steps per episode.
+        save_first_episode_video: Whether to save a video of the first episode.
+        save_dir: Directory to save the video in (required if save_first_episode_video=True).
+        video_prefix: Prefix for the video filename.
     
     Returns:
         Dictionary containing validation metrics:
@@ -152,6 +163,7 @@ def run_validation_episodes(
     tasks_completed_at_all = 0
     tasks_attempted = 0
     episode_returns = []
+    episode_frames = []
     
     for ep_idx in tqdm.tqdm(range(num_episodes), desc="Running validation episodes"):
         ob, info = env.reset()
@@ -160,6 +172,15 @@ def run_validation_episodes(
         tasks_attempted += 1
         episode_had_success = False
         episode_return = 0.0
+        
+        # Track option state for video
+        current_option_idx = None
+        current_option_name = None
+        
+        # Render first frame if saving video
+        if ep_idx == 0 and save_first_episode_video:
+            frame = add_text_overlay(env.render(), current_option_idx, current_option_name)
+            episode_frames = [frame]
         
         done = False
         step = 0
@@ -174,6 +195,15 @@ def run_validation_episodes(
             done = terminated or truncated
             episode_return += reward
             
+            # Track option info for video
+            if ep_idx == 0 and save_first_episode_video:
+                current_active_option = agent.active_option
+                if current_active_option is not None:
+                    current_option_idx = agent._options.index(current_active_option)
+                    current_option_name = current_active_option.name
+                frame = add_text_overlay(env.render(), current_option_idx, current_option_name)
+                episode_frames.append(frame)
+            
             # Check task completion
             is_task_done = task_done(env, info)
             if done and is_task_done:
@@ -187,6 +217,18 @@ def run_validation_episodes(
 
         assert step == max_episode_steps, "Each episode should last its full length"
         episode_returns.append(episode_return)
+        
+        # Save first episode video
+        if ep_idx == 0 and save_first_episode_video:
+            assert save_dir is not None, "save_dir must be provided if save_first_episode_video is True"
+            assert episode_frames, "episode_frames should not be empty"
+            video_filename = f"{video_prefix}_first_episode"
+            save_episode_video(
+                episode_frames,
+                save_dir=save_dir,
+                filename=video_filename,
+                fps=30,
+            )
 
     # Compute metrics
     success_rate = tasks_completed_at_end / tasks_attempted if tasks_attempted > 0 else 0.0
@@ -523,6 +565,9 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                 agent=agent,
                 num_episodes=args.episode_window_size,
                 max_episode_steps=args.max_episode_steps,
+                save_first_episode_video=args.save_first_episode_video,
+                save_dir=save_path,
+                video_prefix=f"validation_step{global_step}",
             )
             q_network.train()  # Set back to training mode
             

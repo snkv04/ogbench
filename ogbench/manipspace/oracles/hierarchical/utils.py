@@ -3,6 +3,10 @@ import cv2
 from typing import Optional
 import time
 import gymnasium as gym
+import pathlib
+import imageio
+from loguru import logger as logging
+from typing import List
 
 
 def init_realtime_rendering(window_name: str, width: int = 2000, height: int = 2000):
@@ -99,3 +103,41 @@ def make_manipspace_env(env_id: str, seed: int, max_episode_steps: int, task_id:
     env.action_space.seed(seed)
     env.observation_space.seed(seed)
     return env
+
+
+def save_episode_video(
+    frames: List[np.ndarray],
+    save_dir: str,
+    filename: str,
+    fps: int = 30,
+) -> str:
+    """Save episode frames as a video file.
+    
+    Args:
+        frames: List of RGB frames (numpy arrays).
+        save_dir: Directory to save the video in.
+        filename: Name of the video file (without extension).
+        fps: Frames per second.
+    
+    Returns:
+        Full path to the saved video.
+    """
+    if not frames:
+        return ""
+    
+    save_path = pathlib.Path(save_dir)
+    save_path.mkdir(parents=True, exist_ok=True)
+    video_path = save_path / f"{filename}.mp4"
+    
+    with imageio.get_writer(
+        video_path.as_posix(),
+        fps=fps,
+        codec='libx264',
+        quality=8,
+        macro_block_size=None,
+    ) as writer:
+        for frame in frames:
+            writer.append_data(frame)
+    
+    logging.info(f"Saved video to: {video_path.as_posix()}")
+    return video_path.as_posix()
