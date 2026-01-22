@@ -234,10 +234,12 @@ def main():
     tasks_completed_at_end = 0
     tasks_completed_at_all = 0
     tasks_attempted = 0
+    episode_returns = []
     per_task_stats = defaultdict(lambda: {
         'attempted': 0,
         'completed_at_end': 0,
         'completed_at_all': 0,
+        'episode_returns': [],
     })
     
     # Initialize window for real-time rendering if enabled
@@ -264,6 +266,7 @@ def main():
         per_task_stats[task_id]['attempted'] += 1
         tasks_attempted += 1  # Each episode starts with one task
         episode_had_success = False
+        episode_return = 0.0
         
         # Track option state
         prev_option_terminated = True
@@ -293,6 +296,7 @@ def main():
             
             next_ob, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
+            episode_return += reward
             # print(f"done = {done}, step = {step}")
             
             # Track option info
@@ -340,6 +344,10 @@ def main():
             step += 1
         assert step == args.max_episode_steps, "Each episode should last its full length"
         
+        # Track episode return
+        episode_returns.append(episode_return)
+        per_task_stats[task_id]['episode_returns'].append(episode_return)
+        
         total_steps += step
         if ep_idx < num_train_episodes:
             total_train_steps += step
@@ -369,16 +377,18 @@ def main():
         print(f'Checkpoint path: {args.checkpoint_path}')
     print(f'Total steps: {total_steps}')
     print(f'Total episodes: {total_episodes}')
+    print(f'Average episode return: {np.mean(episode_returns):.2f}')
     print(f'Success rate (tasks completed at end of episode): {tasks_completed_at_end}/{tasks_attempted} ({100*tasks_completed_at_end/tasks_attempted:.1f}%)')
     print(f'Completion rate (tasks completed at any point in the episode): {tasks_completed_at_all}/{tasks_attempted} ({100*tasks_completed_at_all/tasks_attempted:.1f}%)')
     
     # Per-task breakdown
-    print(f'\nPer-task success rates:')
+    print(f'\nPer-task statistics:')
     for task_id in sorted(per_task_stats.keys()):
         stats = per_task_stats[task_id]
         task_name = env.unwrapped.task_infos[task_id - 1]['task_name']
-        rate = 100 * stats['completed_at_end'] / stats['attempted'] if stats['attempted'] > 0 else 0
+        avg_return = np.mean(stats['episode_returns']) if stats['episode_returns'] else 0.0
         print(f'  Task {task_id} ({task_name}):')
+        print(f'    Average return: {avg_return:.2f}')
         print(f'    Completed at end: {stats["completed_at_end"]}/{stats["attempted"]} ({100*stats["completed_at_end"]/stats["attempted"]:.1f}%)')
         print(f'    Completed at any point: {stats["completed_at_all"]}/{stats["attempted"]} ({100*stats["completed_at_all"]/stats["attempted"]:.1f}%)')
     

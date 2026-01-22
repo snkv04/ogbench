@@ -100,6 +100,7 @@ def save_checkpoint(
     args: Args,
     episode_returns: deque,
     episode_successes: deque,
+    episode_completions: deque,
     training_metrics: List[dict],
     save_path: str,
 ) -> None:
@@ -117,6 +118,7 @@ def save_checkpoint(
         # Running averages
         "episode_returns": list(episode_returns),
         "episode_successes": list(episode_successes),
+        "episode_completions": list(episode_completions),
         # Training metrics history
         "training_metrics": training_metrics,
     }
@@ -143,11 +145,13 @@ def run_validation_episodes(
         Dictionary containing validation metrics:
             - 'success_rate': Success rate (tasks completed at end of episode)
             - 'completion_rate': Completion rate (tasks completed at any point)
+            - 'avg_episode_return': Average episode return across validation episodes
             - 'num_episodes': Number of episodes run
     """
     tasks_completed_at_end = 0
     tasks_completed_at_all = 0
     tasks_attempted = 0
+    episode_returns = []
     
     for ep_idx in tqdm.tqdm(range(num_episodes), desc="Running validation episodes"):
         ob, info = env.reset()
@@ -155,6 +159,7 @@ def run_validation_episodes(
         
         tasks_attempted += 1
         episode_had_success = False
+        episode_return = 0.0
         
         done = False
         step = 0
@@ -167,6 +172,7 @@ def run_validation_episodes(
             # Step through time
             next_ob, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
+            episode_return += reward
             
             # Check task completion
             is_task_done = task_done(env, info)
@@ -180,14 +186,17 @@ def run_validation_episodes(
             step += 1
 
         assert step == max_episode_steps, "Each episode should last its full length"
+        episode_returns.append(episode_return)
 
     # Compute metrics
     success_rate = tasks_completed_at_end / tasks_attempted if tasks_attempted > 0 else 0.0
     completion_rate = tasks_completed_at_all / tasks_attempted if tasks_attempted > 0 else 0.0
+    avg_episode_return = np.mean(episode_returns) if episode_returns else 0.0
     
     return {
         'success_rate': success_rate,
         'completion_rate': completion_rate,
+        'avg_episode_return': avg_episode_return,
         'num_episodes': num_episodes,
     }
 
@@ -283,6 +292,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
     start_global_step = 0
     episode_returns = deque(maxlen=args.episode_window_size)
     episode_successes = deque(maxlen=args.episode_window_size)
+    episode_completions = deque(maxlen=args.episode_window_size)
     training_metrics = []
     if args.load_path:
         if not os.path.exists(args.load_path):
@@ -309,6 +319,8 @@ poetry run pip install "stable_baselines3==2.0.0a1"
             episode_returns.extend(checkpoint["episode_returns"])
         if "episode_successes" in checkpoint:
             episode_successes.extend(checkpoint["episode_successes"])
+        if "episode_completions" in checkpoint:
+            episode_completions.extend(checkpoint["episode_completions"])
         
         # Restore training metrics history
         if "training_metrics" in checkpoint:
@@ -331,6 +343,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
     start_burnin_global_step = start_global_step
     episode_return = 0.0
     episode_step_count = 0
+    episode_had_completion = False
     current_hl_info = None
     
     # Initial render
@@ -387,6 +400,10 @@ poetry run pip install "stable_baselines3==2.0.0a1"
         current_hl_info['accumulated_reward'] += (args.gamma ** current_hl_info['option_length']) * reward
         current_hl_info['option_length'] += 1
         episode_return += reward
+        
+        # Check if task was completed at any point during episode
+        if not episode_had_completion and task_done(env, next_info):
+            episode_had_completion = True
 
         # Render frame if enabled
         if args.render_realtime and agent.active_option is not None:
@@ -413,8 +430,10 @@ poetry run pip install "stable_baselines3==2.0.0a1"
             # Track episode stats
             episode_returns.append(episode_return)
             episode_successes.append(float(next_info['success']))
+            episode_completions.append(float(episode_had_completion))
             episode_return = 0.0
             episode_step_count = 0
+            episode_had_completion = False
 
             # Reset environment and agent
             ob, info = env.reset()
@@ -457,7 +476,8 @@ poetry run pip install "stable_baselines3==2.0.0a1"
             speed = (global_step - start_burnin_global_step) / (time.time() - start_time)
             avg_return = np.mean(episode_returns) if episode_returns else 0
             avg_success = np.mean(episode_successes) if episode_successes else 0
-            desc = f"speed: {speed:4.2f} sps, return: {avg_return:.2f}, success: {avg_success:.2%}"
+            avg_completion = np.mean(episode_completions) if episode_completions else 0
+            desc = f"sps: {speed:4.2f}, avg_ret: {avg_return:.2f}, avg_suc: {avg_success:.2%}, avg_cmpl: {avg_completion:.2%}"
             pbar.set_description(desc)
             
             # Track metrics
@@ -466,6 +486,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                 "train/speed": float(speed),
                 "train/avg_episode_return": float(avg_return),
                 "train/success_rate": float(avg_success),
+                "train/completion_rate": float(avg_completion),
                 "train/epsilon": float(epsilon),
             }
             if global_step > args.learning_starts:
@@ -488,6 +509,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                 args=args,
                 episode_returns=episode_returns,
                 episode_successes=episode_successes,
+                episode_completions=episode_completions,
                 training_metrics=training_metrics,
                 save_path=checkpoint_path
             )
@@ -508,6 +530,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
             logging.info(f"Validation results (step {global_step}):")
             logging.info(f"    success_rate={val_metrics['success_rate']:.2%}")
             logging.info(f"    completion_rate={val_metrics['completion_rate']:.2%}")
+            logging.info(f"    avg_episode_return={val_metrics['avg_episode_return']:.2f}")
             
             # Log validation metrics to wandb
             if args.track_with_wandb:
@@ -515,6 +538,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                     "val/global_step": global_step,
                     "val/success_rate": float(val_metrics['success_rate']),
                     "val/completion_rate": float(val_metrics['completion_rate']),
+                    "val/avg_episode_return": float(val_metrics['avg_episode_return']),
                 }, step=global_step)
             
             # Resets training state after validation
@@ -522,6 +546,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
             agent.reset(ob, info)
             episode_return = 0.0
             episode_step_count = 0
+            episode_had_completion = False
             current_hl_info = None
 
     # Cleanup
@@ -542,6 +567,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
             args=args,
             episode_returns=episode_returns,
             episode_successes=episode_successes,
+            episode_completions=episode_completions,
             training_metrics=training_metrics,
             save_path=final_model_path
         )
@@ -557,3 +583,4 @@ poetry run pip install "stable_baselines3==2.0.0a1"
     logging.info(f"\nTraining complete!")
     logging.info(f"Final average return across episodes: {np.mean(episode_returns):.2f}")
     logging.info(f"Final success rate across episodes: {np.mean(episode_successes):.2%}")
+    logging.info(f"Final completion rate across episodes: {np.mean(episode_completions):.2%}")
