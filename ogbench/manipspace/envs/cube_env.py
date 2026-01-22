@@ -14,17 +14,19 @@ class CubeEnv(ManipSpaceEnv):
     - `env_type`: 'single', 'double', 'triple', 'quadruple'.
     """
 
-    def __init__(self, env_type, permute_blocks=True, *args, **kwargs):
+    def __init__(self, env_type, permute_blocks=True, noise_initial_state=True, *args, **kwargs):
         """Initialize the Cube environment.
 
         Args:
             env_type: Environment type. One of 'single', 'double', 'triple', or 'quadruple'.
             permute_blocks: Whether to randomly permute the order of the blocks at task initialization.
+            noise_initial_state: Whether to add noise to the initial cube positions and orientations.
             *args: Additional arguments to pass to the parent class.
             **kwargs: Additional keyword arguments to pass to the parent class.
         """
         self._env_type = env_type
         self._permute_blocks = permute_blocks
+        self._noise_initial_state = noise_initial_state
 
         if self._env_type == 'single':
             self._num_cubes = 1
@@ -627,11 +629,13 @@ class CubeEnv(ManipSpaceEnv):
             self._data.qvel[:] = saved_qvel
             self.initialize_arm()
             for i in range(self._num_cubes):
-                # Randomize the position and orientation of the cube slightly.
                 obj_pos = init_xyzs[i].copy()
-                obj_pos[:2] += self.np_random.uniform(-0.01, 0.01, size=2)
+                yaw = 0.0
+                if self._noise_initial_state:
+                    # Randomize the position and orientation of the cube slightly.
+                    obj_pos[:2] += self.np_random.uniform(-0.01, 0.01, size=2)
+                    yaw += self.np_random.uniform(0, 2 * np.pi)
                 self._data.joint(f'object_joint_{i}').qpos[:3] = obj_pos
-                yaw = self.np_random.uniform(0, 2 * np.pi)
                 obj_ori = lie.SO3.from_z_radians(yaw).wxyz.tolist()
                 self._data.joint(f'object_joint_{i}').qpos[3:] = obj_ori
                 self._data.mocap_pos[self._cube_target_mocap_ids[i]] = goal_xyzs[i]

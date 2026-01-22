@@ -92,13 +92,14 @@ def render_frame_realtime(
     time.sleep(delay)
 
 
-def make_manipspace_env(env_id: str, seed: int, max_episode_steps: int, task_id: int):
+def make_cube_env(env_id: str, seed: int, max_episode_steps: int, task_id: int, noise_initial_state: bool = True):
     env = gym.make(
         env_id,
         mode='task',
         terminate_at_goal=False,
         max_episode_steps=max_episode_steps,
         reward_task_id=task_id,  # Fixed task for all episodes
+        noise_initial_state=noise_initial_state,
     )
     env.action_space.seed(seed)
     env.observation_space.seed(seed)

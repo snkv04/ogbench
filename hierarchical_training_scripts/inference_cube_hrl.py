@@ -60,6 +60,7 @@ class Args:
     env_name: str = "cube-single-v0"
     seed: int = 1048596
     task_id: int = 0  # Fixed task ID for all episodes (0 = default task)
+    noise_initial_state: bool = True
     
     # Dataset generation
     num_episodes: int = 1000
@@ -131,8 +132,10 @@ def main():
         mode='task',
         reward_task_id=args.task_id,  # Fixed task for all episodes
         max_episode_steps=args.max_episode_steps,
+        noise_initial_state=args.noise_initial_state,
     )
     print(f"Using fixed task_id={args.task_id} for all episodes")
+    print(f"noise_initial_state={args.noise_initial_state}")
     
     # Initialize agent based on agent_type
     ob, info = env.reset(seed=args.seed)

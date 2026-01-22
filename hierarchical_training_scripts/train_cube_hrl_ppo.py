@@ -29,7 +29,7 @@ from ogbench.manipspace.oracles.hierarchical.utils import (
     render_frame_realtime,
     init_realtime_rendering,
     cleanup_realtime_rendering,
-    make_manipspace_env,
+    make_cube_env,
 )
 torch.set_float32_matmul_precision("high")
 
@@ -463,7 +463,7 @@ if __name__ == "__main__":
     print(f"Using device: {device}")
 
     # Environment setup
-    env = make_manipspace_env(args.env_id, args.seed, args.max_episode_steps, args.task_id)
+    env = make_cube_env(args.env_id, args.seed, args.max_episode_steps, args.task_id)
     print(f"Using fixed task_id={args.task_id} for all episodes")
 
     # Initialize real-time rendering if enabled

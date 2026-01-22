@@ -32,7 +32,7 @@ from ogbench.manipspace.oracles.hierarchical.utils import (
     render_frame_realtime,
     init_realtime_rendering,
     cleanup_realtime_rendering,
-    make_manipspace_env,
+    make_cube_env,
     add_text_overlay,
     save_episode_video,
 )
@@ -59,6 +59,7 @@ class Args:
     # Training-specific arguments
     env_id: str = "cube-single-v0"
     task_id: int = 0  # Fixed task ID for all episodes (0 = default task)
+    noise_initial_state: bool = True
     total_timesteps: int = 1000000
     learning_rate: float = 1e-3
     num_envs: int = 1
@@ -297,8 +298,9 @@ poetry run pip install "stable_baselines3==2.0.0a1"
     logging.info(f"Using device: {device}")
 
     # Environment setup
-    env = make_manipspace_env(args.env_id, args.seed, args.max_episode_steps, args.task_id)
+    env = make_cube_env(args.env_id, args.seed, args.max_episode_steps, args.task_id, args.noise_initial_state)
     logging.info(f"Using fixed task_id={args.task_id} for all episodes")
+    logging.info(f"noise_initial_state={args.noise_initial_state}")
 
     # Initialize real-time rendering if enabled
     render_window_name = "DQN Training - Real-time Rendering"
