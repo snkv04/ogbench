@@ -7,4 +7,5 @@ dist/
 .idea/
 .ruff_cache/
 .venv/
+venv/
 .ogbench/

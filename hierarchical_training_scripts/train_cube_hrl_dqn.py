@@ -11,6 +11,7 @@ from typing import List, Optional, Tuple
 
 import cv2
 import gymnasium as gym
+from loguru import logger as logging
 import numpy as np
 import torch
 import torch.nn as nn
@@ -118,7 +119,7 @@ def save_checkpoint(
     }
 
     torch.save(checkpoint, save_path)
-    print(f"Checkpoint saved to: {save_path}")
+    logging.info(f"Checkpoint saved to: {save_path}")
 
 
 if __name__ == "__main__":
@@ -137,7 +138,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
     assert args.num_envs == 1, "Only one environment is supported for hierarchical DQN at the moment"
     args.num_episodes = args.total_timesteps // args.max_episode_steps
     if args.total_timesteps % args.max_episode_steps != 0:
-        print(
+        logging.warning(
             f"WARNING: total_timesteps ({args.total_timesteps}) is not divisible by max_episode_steps ({args.max_episode_steps})."
             f"Will instead train for {args.num_episodes * args.max_episode_steps} steps ({args.total_timesteps - (args.num_episodes * args.max_episode_steps)} fewer)."
         )
@@ -162,7 +163,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
     # Setup save directory
     save_path = os.path.join(args.save_dir, run_name)
     os.makedirs(save_path, exist_ok=True)
-    print(f"Saving to: {save_path}")
+    logging.info(f"Saving to: {save_path}")
 
     # TRY NOT TO MODIFY: Seeding
     random.seed(args.seed)
@@ -172,11 +173,11 @@ poetry run pip install "stable_baselines3==2.0.0a1"
 
     # Sets device
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
-    print(f"Using device: {device}")
+    logging.info(f"Using device: {device}")
 
     # Environment setup
     env = make_manipspace_env(args.env_id, args.seed, args.max_episode_steps, args.task_id)
-    print(f"Using fixed task_id={args.task_id} for all episodes")
+    logging.info(f"Using fixed task_id={args.task_id} for all episodes")
 
     # Initialize real-time rendering if enabled
     render_window_name = "DQN Training - Real-time Rendering"
@@ -216,7 +217,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
     if args.load_path:
         if not os.path.exists(args.load_path):
             raise FileNotFoundError(f"Checkpoint not found: {args.load_path}")
-        print(f"Loading checkpoint from: {args.load_path}")
+        logging.info(f"Loading checkpoint from: {args.load_path}")
         checkpoint = torch.load(args.load_path, map_location=device)
         q_network.load_state_dict(checkpoint["q_network_state_dict"])
         target_network.load_state_dict(checkpoint["target_network_state_dict"])
@@ -243,8 +244,8 @@ poetry run pip install "stable_baselines3==2.0.0a1"
         if "training_metrics" in checkpoint:
             training_metrics = checkpoint["training_metrics"]
 
-        print("Finished loading checkpoint")
-        print(f"Resuming from global_step={start_global_step}")
+        logging.info("Finished loading checkpoint")
+        logging.info(f"Resuming from global_step={start_global_step}")
 
     # Hierarchical agent
     ob, info = env.reset(seed=args.seed)
@@ -441,15 +442,15 @@ poetry run pip install "stable_baselines3==2.0.0a1"
             training_metrics=training_metrics,
             save_path=final_model_path
         )
-        print(f"Final model (after {global_step} steps) has been saved to {final_model_path}")
+        logging.info(f"Final model (after {global_step} steps) has been saved to {final_model_path}")
 
     # Save training metrics
     metrics_path = os.path.join(save_path, f"training_metrics_step{global_step}.json")
     with open(metrics_path, "w") as f:
         json.dump(training_metrics, f, indent=2)
-    print(f"Saved training metrics to {metrics_path}")
+    logging.info(f"Saved training metrics to {metrics_path}")
 
     # Final logging
-    print(f"\nTraining complete!")
-    print(f"Final average return across episodes: {np.mean(episode_returns):.2f}")
-    print(f"Final success rate across episodes: {np.mean(episode_successes):.2%}")
+    logging.info(f"\nTraining complete!")
+    logging.info(f"Final average return across episodes: {np.mean(episode_returns):.2f}")
+    logging.info(f"Final success rate across episodes: {np.mean(episode_successes):.2%}")
