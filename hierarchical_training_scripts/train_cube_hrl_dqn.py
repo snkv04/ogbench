@@ -32,6 +32,7 @@ from ogbench.manipspace.oracles.hierarchical.utils import (
     cleanup_realtime_rendering,
     make_manipspace_env,
 )
+from hierarchical_training_scripts.inference_cube_hrl import task_done
 
 torch.set_float32_matmul_precision("high")
 
@@ -45,6 +46,7 @@ class Args:
     track_with_wandb: bool = False
     wandb_project_name: str = "dqn_cube_hierarchical"
     wandb_entity: Optional[str] = None
+    log_freq: int = 100
 
     # Agent-specific arguments
     disable_no_op: bool = False
@@ -58,6 +60,7 @@ class Args:
     num_envs: int = 1
     max_episode_steps: int = 200
     measure_burnin: int = 3
+    episode_window_size: int = 10
     
     # DQN-specific arguments
     buffer_size: int = 100000
@@ -120,6 +123,73 @@ def save_checkpoint(
 
     torch.save(checkpoint, save_path)
     logging.info(f"Checkpoint saved to: {save_path}")
+
+
+def run_validation_episodes(
+    env,
+    agent,
+    num_episodes: int,
+    max_episode_steps: int,
+) -> dict:
+    """Run validation episodes and compute metrics.
+    
+    Args:
+        env: The environment to run validation in.
+        agent: The hierarchical agent (PPO or DQN) to use for action selection.
+        num_episodes: Number of validation episodes to run.
+        max_episode_steps: Maximum steps per episode.
+    
+    Returns:
+        Dictionary containing validation metrics:
+            - 'success_rate': Success rate (tasks completed at end of episode)
+            - 'completion_rate': Completion rate (tasks completed at any point)
+            - 'num_episodes': Number of episodes run
+    """
+    tasks_completed_at_end = 0
+    tasks_completed_at_all = 0
+    tasks_attempted = 0
+    
+    for ep_idx in tqdm.tqdm(range(num_episodes), desc="Running validation episodes"):
+        ob, info = env.reset()
+        agent.reset(ob, info)
+        
+        tasks_attempted += 1
+        episode_had_success = False
+        
+        done = False
+        step = 0
+        
+        while not done:
+            # Get action from agent
+            action = agent.select_action(ob, info)
+            action = np.array(action)
+            
+            # Step through time
+            next_ob, reward, terminated, truncated, info = env.step(action)
+            done = terminated or truncated
+            
+            # Check task completion
+            is_task_done = task_done(env, info)
+            if done and is_task_done:
+                tasks_completed_at_end += 1
+            if is_task_done and not episode_had_success:
+                tasks_completed_at_all += 1
+                episode_had_success = True
+            
+            ob = next_ob
+            step += 1
+
+        assert step == max_episode_steps, "Each episode should last its full length"
+
+    # Compute metrics
+    success_rate = tasks_completed_at_end / tasks_attempted if tasks_attempted > 0 else 0.0
+    completion_rate = tasks_completed_at_all / tasks_attempted if tasks_attempted > 0 else 0.0
+    
+    return {
+        'success_rate': success_rate,
+        'completion_rate': completion_rate,
+        'num_episodes': num_episodes,
+    }
 
 
 if __name__ == "__main__":
@@ -211,8 +281,8 @@ poetry run pip install "stable_baselines3==2.0.0a1"
 
     # Load from checkpoint if specified
     start_global_step = 0
-    episode_returns = deque(maxlen=100)
-    episode_successes = deque(maxlen=100)
+    episode_returns = deque(maxlen=args.episode_window_size)
+    episode_successes = deque(maxlen=args.episode_window_size)
     training_metrics = []
     if args.load_path:
         if not os.path.exists(args.load_path):
@@ -382,7 +452,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                     )
 
         # Logging
-        if global_step % 100 == 0 and start_time is not None:
+        if global_step % args.log_freq == 0 and start_time is not None:
             # Compute metrics
             speed = (global_step - start_burnin_global_step) / (time.time() - start_time)
             avg_return = np.mean(episode_returns) if episode_returns else 0
@@ -392,22 +462,23 @@ poetry run pip install "stable_baselines3==2.0.0a1"
             
             # Track metrics
             metrics = {
-                "global_step": global_step,
-                "speed": float(speed),
-                "avg_episode_return": float(avg_return),
-                "success_rate": float(avg_success),
-                "epsilon": float(epsilon),
+                "train/global_step": global_step,
+                "train/speed": float(speed),
+                "train/avg_episode_return": float(avg_return),
+                "train/success_rate": float(avg_success),
+                "train/epsilon": float(epsilon),
             }
             if global_step > args.learning_starts:
-                metrics["loss"] = float(loss.item())
+                metrics["train/loss"] = float(loss.item())
             training_metrics.append(metrics)
 
-            # Log metrics to remote server
+            # Log training metrics to wandb
             if args.track_with_wandb:
                 wandb.log(metrics, step=global_step)
 
-        # Save checkpoint
+        # Save checkpoint and perform validation
         if args.save_model and global_step % args.checkpoint_freq == 0 and global_step > 0:
+            # Save checkpoint
             checkpoint_path = os.path.join(save_path, f"checkpoint_step{global_step}.pt")
             save_checkpoint(
                 global_step=global_step,
@@ -420,6 +491,38 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                 training_metrics=training_metrics,
                 save_path=checkpoint_path
             )
+
+            # Run validation episodes
+            assert global_step % args.max_episode_steps == 0, "Validation should run right after an episode ends"
+            logging.info(f"Running validation with {args.episode_window_size} episodes...")
+            q_network.eval()  # Set to evaluation mode
+            val_metrics = run_validation_episodes(
+                env=env,
+                agent=agent,
+                num_episodes=args.episode_window_size,
+                max_episode_steps=args.max_episode_steps,
+            )
+            q_network.train()  # Set back to training mode
+            
+            # Log validation metrics
+            logging.info(f"Validation results (step {global_step}):")
+            logging.info(f"    success_rate={val_metrics['success_rate']:.2%}")
+            logging.info(f"    completion_rate={val_metrics['completion_rate']:.2%}")
+            
+            # Log validation metrics to wandb
+            if args.track_with_wandb:
+                wandb.log({
+                    "val/global_step": global_step,
+                    "val/success_rate": float(val_metrics['success_rate']),
+                    "val/completion_rate": float(val_metrics['completion_rate']),
+                }, step=global_step)
+            
+            # Resets training state after validation
+            ob, info = env.reset()
+            agent.reset(ob, info)
+            episode_return = 0.0
+            episode_step_count = 0
+            current_hl_info = None
 
     # Cleanup
     env.close()
