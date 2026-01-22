@@ -60,6 +60,7 @@ class Args:
     env_id: str = "cube-single-v0"
     task_id: int = 0  # Fixed task ID for all episodes (0 = default task)
     noise_initial_state: bool = True
+    reward_is_neg_dist: bool = False
     total_timesteps: int = 1000000
     learning_rate: float = 1e-3
     num_envs: int = 1
@@ -298,9 +299,10 @@ poetry run pip install "stable_baselines3==2.0.0a1"
     logging.info(f"Using device: {device}")
 
     # Environment setup
-    env = make_cube_env(args.env_id, args.seed, args.max_episode_steps, args.task_id, args.noise_initial_state)
+    env = make_cube_env(args.env_id, args.seed, args.max_episode_steps, args.task_id, args.noise_initial_state, args.reward_is_neg_dist)
     logging.info(f"Using fixed task_id={args.task_id} for all episodes")
     logging.info(f"noise_initial_state={args.noise_initial_state}")
+    logging.info(f"reward_is_neg_dist={args.reward_is_neg_dist}")
 
     # Initialize real-time rendering if enabled
     render_window_name = "DQN Training - Real-time Rendering"

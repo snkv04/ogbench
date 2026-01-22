@@ -14,19 +14,29 @@ class CubeEnv(ManipSpaceEnv):
     - `env_type`: 'single', 'double', 'triple', 'quadruple'.
     """
 
-    def __init__(self, env_type, permute_blocks=True, noise_initial_state=True, *args, **kwargs):
+    def __init__(
+        self,
+        env_type,
+        permute_blocks=True,
+        noise_initial_state=True,
+        reward_is_neg_dist=False,
+        *args,
+        **kwargs,
+    ):
         """Initialize the Cube environment.
 
         Args:
             env_type: Environment type. One of 'single', 'double', 'triple', or 'quadruple'.
             permute_blocks: Whether to randomly permute the order of the blocks at task initialization.
             noise_initial_state: Whether to add noise to the initial cube positions and orientations.
+            reward_is_neg_dist: Whether to use negative xy-distance as reward (only for single cube).
             *args: Additional arguments to pass to the parent class.
             **kwargs: Additional keyword arguments to pass to the parent class.
         """
         self._env_type = env_type
         self._permute_blocks = permute_blocks
         self._noise_initial_state = noise_initial_state
+        self._reward_is_neg_dist = reward_is_neg_dist
 
         if self._env_type == 'single':
             self._num_cubes = 1
@@ -810,6 +820,17 @@ class CubeEnv(ManipSpaceEnv):
         return np.concatenate(ob)
 
     def compute_reward(self):
+        if self._reward_is_neg_dist:
+            # TODO: Implement an analogous function for multiple cubes.
+            assert self._num_cubes == 1, "reward_is_neg_dist only supported for single cube environment"
+            assert self._reward_task_id is not None, "reward_is_neg_dist only supported for task mode"
+            target_block = 0
+            target_pos = self.cur_task_info['goal_xyzs'][target_block]
+            block_pos = self._data.joint(f'object_joint_{target_block}').qpos[:3]
+            xy_dist = np.linalg.norm(target_pos[:2] - block_pos[:2])
+            reward = -xy_dist
+            return reward
+        
         if self._reward_task_id is None:
             return super().compute_reward()
 

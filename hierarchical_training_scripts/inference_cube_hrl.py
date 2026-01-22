@@ -61,6 +61,7 @@ class Args:
     seed: int = 1048596
     task_id: int = 0  # Fixed task ID for all episodes (0 = default task)
     noise_initial_state: bool = True
+    reward_is_neg_dist: bool = False
     
     # Dataset generation
     num_episodes: int = 1000
@@ -133,9 +134,11 @@ def main():
         reward_task_id=args.task_id,  # Fixed task for all episodes
         max_episode_steps=args.max_episode_steps,
         noise_initial_state=args.noise_initial_state,
+        reward_is_neg_dist=args.reward_is_neg_dist,
     )
     print(f"Using fixed task_id={args.task_id} for all episodes")
     print(f"noise_initial_state={args.noise_initial_state}")
+    print(f"reward_is_neg_dist={args.reward_is_neg_dist}")
     
     # Initialize agent based on agent_type
     ob, info = env.reset(seed=args.seed)

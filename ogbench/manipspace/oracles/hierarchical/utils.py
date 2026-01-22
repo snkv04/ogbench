@@ -92,7 +92,14 @@ def render_frame_realtime(
     time.sleep(delay)
 
 
-def make_cube_env(env_id: str, seed: int, max_episode_steps: int, task_id: int, noise_initial_state: bool = True):
+def make_cube_env(
+    env_id: str,
+    seed: int,
+    max_episode_steps: int,
+    task_id: int,
+    noise_initial_state: bool = True,
+    reward_is_neg_dist: bool = False,
+):
     env = gym.make(
         env_id,
         mode='task',
@@ -100,6 +107,7 @@ def make_cube_env(env_id: str, seed: int, max_episode_steps: int, task_id: int, 
         max_episode_steps=max_episode_steps,
         reward_task_id=task_id,  # Fixed task for all episodes
         noise_initial_state=noise_initial_state,
+        reward_is_neg_dist=reward_is_neg_dist,
     )
     env.action_space.seed(seed)
     env.observation_space.seed(seed)
