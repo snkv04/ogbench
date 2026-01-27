@@ -18,6 +18,8 @@ To install additional dependencies that were not already saved with `uv`:
 uv pip install torch
 uv pip install tyro
 uv pip install wandb
+uv pip install loguru
+uv pip install stable-baselines3
 ```
 
 ### Training script

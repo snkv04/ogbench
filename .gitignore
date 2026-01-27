@@ -7,5 +7,6 @@ dist/
 .idea/
 .ruff_cache/
 .venv/
-venv/
+venv*/
 .ogbench/
+slurm_logs/

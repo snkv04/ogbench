@@ -66,7 +66,7 @@ class Args:
     num_envs: int = 1
     max_episode_steps: int = 200
     measure_burnin: int = 3
-    episode_window_size: int = 10
+    episode_window_size: int = 100
     
     # DQN-specific arguments
     buffer_size: int = 100000
@@ -82,7 +82,7 @@ class Args:
 
     # Saving and loading
     save_dir: str = ".ogbench/dqn_runs"
-    checkpoint_freq: int = 10000  # Save every N steps
+    checkpoint_freq: int = 100000  # Also controls validation frequency
     save_model: bool = True
     run_name: str = ""
     load_path: str = ""
@@ -386,7 +386,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
 
     # Training variables
     start_time = None
-    start_burnin_global_step = start_global_step
+    start_burnin_global_step = None
     episode_return = 0.0
     episode_step_count = 0
     episode_had_completion = False
@@ -490,7 +490,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
             ob, info = next_ob, next_info
 
         # DQN update
-        if global_step > args.learning_starts:
+        if global_step >= args.learning_starts:
             if global_step % args.train_frequency == 0:
                 data = rb.sample(args.batch_size)
                 
@@ -535,7 +535,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                 "train/completion_rate": float(avg_completion),
                 "train/epsilon": float(epsilon),
             }
-            if global_step > args.learning_starts:
+            if global_step >= args.learning_starts:
                 metrics["train/loss"] = float(loss.item())
             training_metrics.append(metrics)
 
@@ -544,7 +544,11 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                 wandb.log(metrics, step=global_step)
 
         # Save checkpoint and perform validation
-        if args.save_model and global_step % args.checkpoint_freq == 0 and global_step > 0:
+        if (
+            args.save_model and
+            global_step % args.checkpoint_freq == 0 and
+            global_step >= args.learning_starts
+        ):
             # Save checkpoint
             checkpoint_path = os.path.join(save_path, f"checkpoint_step{global_step}.pt")
             save_checkpoint(
