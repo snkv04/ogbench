@@ -57,12 +57,14 @@ class HierarchicalDQNAgent(HierarchicalAgent):
         device: torch.device,
         disable_no_op: bool = False,
         no_op_duration: int = 10,
+        goal_conditioned_options: bool = False,
     ):
         super().__init__(options=[], env=env, min_norm=0.08)
         self.q_network = q_network
         self.device = device
         self.disable_no_op = disable_no_op
         self.no_op_duration = no_op_duration
+        self.goal_conditioned_options = goal_conditioned_options
         self.epsilon = 0.0  # Default to greedy if not set
         
         # Will be initialized in reset()
@@ -104,23 +106,37 @@ class HierarchicalDQNAgent(HierarchicalAgent):
         """Create the set of options for cube manipulation.
         
         Returns:
-            List of 10 options (or 9, if disable_no_op is True):
-                0: no_op - Do nothing for N steps
-                1: move_above_block - Move end-effector above the target block
-                2: move_to_block - Move end-effector to the target block
-                3: grasp_block - Close gripper to grasp the block
-                4: lift_after_grasp - Lift the grasped block
-                5: move_above_target - Move above the target position
-                6: move_to_target - Move to the target position
-                7: release - Open gripper to release block
-                8: lift_after_release - Lift after releasing
-                9: move_to_final - Move to final position
+            If goal_conditioned_options is False or in data_collection mode:
+                List of 10 options (or 9, if disable_no_op is True):
+                    0: no_op - Do nothing for N steps (optional)
+                    1: move_above_block - Move end-effector above the target block
+                    2: move_to_block - Move end-effector to the target block
+                    3: grasp_block - Close gripper to grasp the block
+                    4: lift_after_grasp - Lift the grasped block
+                    5: move_above_target - Move above the target position
+                    6: move_to_target - Move to the target position
+                    7: release - Open gripper to release block
+                    8: lift_after_release - Lift after releasing
+                    9: move_to_final - Move to final position
+            
+            If goal_conditioned_options is True and in task mode:
+                List of 22 options (or 21, if disable_no_op is True):
+                    0: no_op - Do nothing for N steps (optional)
+                    1: move_above_block - Move end-effector above the target block
+                    2: move_to_block - Move end-effector to the target block
+                    3: grasp_block - Close gripper to grasp the block
+                    4: release - Open gripper to release block
+                    5: lift_after_release - Lift after releasing
+                    6: move_to_final - Move to final position
+                    7-21: For each task: lift_after_grasp_<task_id>, move_above_target_<task_id>, move_to_target_<task_id>
         """
         env = self._env
+        unwrapped_env = env.unwrapped
         target_block = self._target_block
         final_pos = self._final_pos
         final_yaw = self._final_yaw
 
+        # Helper functions for block position and orientation
         def block_above_pos(ob, info):
             return info[f'privileged/block_{target_block}_pos'] + np.array([0, 0, 0.18])
 
@@ -132,39 +148,111 @@ class HierarchicalDQNAgent(HierarchicalAgent):
         def block_pos(ob, info):
             return info[f'privileged/block_{target_block}_pos']
 
-        # Use stored target info (works for both data_collection and task modes)
-        stored_target_pos = self._target_pos
-        stored_target_yaw = self._target_yaw
-
-        def target_above_pos(ob, info):
-            return stored_target_pos + np.array([0, 0, 0.18])
-
-        def target_yaw(ob, info):
-            effector_yaw = info['proprio/effector_yaw'][0]
-            return self._shortest_yaw(effector_yaw, stored_target_yaw)
-
-        def target_pos(ob, info):
-            return stored_target_pos
-
         def get_final_pos(ob, info):
             return final_pos
 
         def get_final_yaw(ob, info):
             return final_yaw
 
-        options = [
-            MoveToPositionOption('move_above_block', env, block_above_pos, block_yaw, gripper_state=-1, min_norm=self._min_norm),
-            MoveToPositionOption('move_to_block', env, block_pos, block_yaw, gripper_state=-1, min_norm=self._min_norm),
-            GraspOption('grasp_block', env, block_pos, block_yaw, min_norm=self._min_norm),
-            LiftVerticallyOption('lift_after_grasp', env, block_pos, target_height=0.36, target_yaw_fn=target_yaw, gripper_state=1, min_norm=self._min_norm),
-            MoveToPositionOption('move_above_target', env, target_above_pos, target_yaw, gripper_state=1, min_norm=self._min_norm),
-            MoveToPositionOption('move_to_target', env, target_pos, target_yaw, gripper_state=1, min_norm=self._min_norm),
-            ReleaseOption('release', env),
-            LiftVerticallyOption('lift_after_release', env, block_pos, target_height=0.32, target_yaw_fn=get_final_yaw, gripper_state=-1, min_norm=self._min_norm),
-            MoveToPositionOption('move_to_final', env, get_final_pos, get_final_yaw, gripper_state=-1, min_norm=self._min_norm),
-        ]
+        # Start building options list
+        options = []
         if not self.disable_no_op:
-            options.insert(0, NoOpOption('no_op', env, duration=self.no_op_duration))
+            options.append(NoOpOption('no_op', env, duration=self.no_op_duration))
+
+        if not self.goal_conditioned_options:
+            # Original behavior: 9 options (plus optional no-op)
+            # Use stored target info (works for both data_collection and task modes)
+            stored_target_pos = self._target_pos
+            stored_target_yaw = self._target_yaw
+
+            def target_above_pos(ob, info):
+                return stored_target_pos + np.array([0, 0, 0.18])
+
+            def target_yaw(ob, info):
+                effector_yaw = info['proprio/effector_yaw'][0]
+                return self._shortest_yaw(effector_yaw, stored_target_yaw)
+
+            def target_pos(ob, info):
+                return stored_target_pos
+
+            options.extend([
+                MoveToPositionOption('move_above_block', env, block_above_pos, block_yaw, gripper_state=-1, min_norm=self._min_norm),
+                MoveToPositionOption('move_to_block', env, block_pos, block_yaw, gripper_state=-1, min_norm=self._min_norm),
+                GraspOption('grasp_block', env, block_pos, block_yaw, min_norm=self._min_norm),
+                LiftVerticallyOption('lift_after_grasp', env, block_pos, target_height=0.36, target_yaw_fn=target_yaw, gripper_state=1, min_norm=self._min_norm),
+                MoveToPositionOption('move_above_target', env, target_above_pos, target_yaw, gripper_state=1, min_norm=self._min_norm),
+                MoveToPositionOption('move_to_target', env, target_pos, target_yaw, gripper_state=1, min_norm=self._min_norm),
+                ReleaseOption('release', env),
+                LiftVerticallyOption('lift_after_release', env, block_pos, target_height=0.32, target_yaw_fn=get_final_yaw, gripper_state=-1, min_norm=self._min_norm),
+                MoveToPositionOption('move_to_final', env, get_final_pos, get_final_yaw, gripper_state=-1, min_norm=self._min_norm),
+            ])
+        else:            
+            # Goal-conditioned behavior: 6 shared + 15 goal-conditioned options (3 per task, plus optional no-op)
+            assert unwrapped_env._mode == 'task', "Goal-conditioned options are only supported in task mode"
+            
+            # Add 6 shared options (no lift_after_grasp here - it's task-specific now)
+            options.extend([
+                MoveToPositionOption('move_above_block', env, block_above_pos, block_yaw, gripper_state=-1, min_norm=self._min_norm),
+                MoveToPositionOption('move_to_block', env, block_pos, block_yaw, gripper_state=-1, min_norm=self._min_norm),
+                GraspOption('grasp_block', env, block_pos, block_yaw, min_norm=self._min_norm),
+                ReleaseOption('release', env),
+                LiftVerticallyOption('lift_after_release', env, block_pos, target_height=0.32, target_yaw_fn=get_final_yaw, gripper_state=-1, min_norm=self._min_norm),
+                MoveToPositionOption('move_to_final', env, get_final_pos, get_final_yaw, gripper_state=-1, min_norm=self._min_norm),
+            ])
+            
+            # Add 3 goal-conditioned options for each task
+            task_infos = unwrapped_env.task_infos
+            for task_id, task_info in enumerate(task_infos):
+                # Get the goal position for this specific task
+                task_goal_pos = task_info['goal_xyzs'][target_block].copy()
+                task_goal_yaw = 0.0  # Task mode just so happens to use identity orientation for every task
+                
+                # Create closures that capture the task-specific goal
+                def make_target_above_pos(goal_pos):
+                    def target_above_pos(ob, info):
+                        return goal_pos + np.array([0, 0, 0.18])
+                    return target_above_pos
+                
+                def make_target_yaw(goal_yaw):
+                    def target_yaw(ob, info):
+                        effector_yaw = info['proprio/effector_yaw'][0]
+                        return self._shortest_yaw(effector_yaw, goal_yaw)
+                    return target_yaw
+                
+                def make_target_pos(goal_pos):
+                    def target_pos(ob, info):
+                        return goal_pos
+                    return target_pos
+                
+                # Create the task-specific options
+                options.extend([
+                    LiftVerticallyOption(
+                        f'lift_after_grasp_task{task_id + 1}',
+                        env,
+                        block_pos,
+                        target_height=0.36,
+                        target_yaw_fn=make_target_yaw(task_goal_yaw),
+                        gripper_state=1,
+                        min_norm=self._min_norm
+                    ),
+                    MoveToPositionOption(
+                        f'move_above_target_task{task_id + 1}',
+                        env,
+                        make_target_above_pos(task_goal_pos),
+                        make_target_yaw(task_goal_yaw),
+                        gripper_state=1,
+                        min_norm=self._min_norm
+                    ),
+                    MoveToPositionOption(
+                        f'move_to_target_task{task_id + 1}',
+                        env,
+                        make_target_pos(task_goal_pos),
+                        make_target_yaw(task_goal_yaw),
+                        gripper_state=1,
+                        min_norm=self._min_norm
+                    ),
+                ])
+        
         return options
     
     @staticmethod

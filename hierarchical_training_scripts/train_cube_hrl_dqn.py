@@ -55,6 +55,7 @@ class Args:
     # Agent-specific arguments
     disable_no_op: bool = False
     no_op_duration: int = 10
+    goal_conditioned_options: bool = False
 
     # Training-specific arguments
     env_id: str = "cube-single-v0"
@@ -320,8 +321,17 @@ poetry run pip install "stable_baselines3==2.0.0a1"
     if args.render_realtime:
         init_realtime_rendering(render_window_name)
 
+    # Calculate number of options based on configuration
+    if args.goal_conditioned_options:
+        num_tasks = len(env.unwrapped.task_infos)
+        # 6 shared options + 3 goal-conditioned options per task + 1 optional no-op
+        num_options = 6 + (3 * num_tasks) + (1 if not args.disable_no_op else 0)
+    else:
+        # Original: 9 regular options + 1 optional no-op
+        num_options = 9 + (1 if not args.disable_no_op else 0)
+    logging.info(f"Number of options: {num_options}")
+
     # Q-Network and target network
-    num_options = 10 if not args.disable_no_op else 9
     obs_dim = HierarchicalDQNAgent.OBS_DIM
     q_network = QNetwork(obs_dim, num_options, hidden_dim=256).to(device)
     target_network = QNetwork(obs_dim, num_options, hidden_dim=256).to(device)
@@ -392,8 +402,10 @@ poetry run pip install "stable_baselines3==2.0.0a1"
         env, q_network, device,
         disable_no_op=args.disable_no_op,
         no_op_duration=args.no_op_duration,
+        goal_conditioned_options=args.goal_conditioned_options,
     )
     agent.reset(ob, info)
+    assert num_options == len(agent._options), "Mismatch in number of options"
 
     # Training variables
     start_time = None
