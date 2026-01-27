@@ -121,7 +121,7 @@ def make_cube_env(
         mode='task',
         terminate_at_goal=False,
         max_episode_steps=max_episode_steps,
-        reward_task_id=task_id,  # Fixed task for all episodes (0 = default task, None = random)
+        reward_task_id=task_id,  # int = fixed task for all episodes, 0 = default task, None = random
         noise_initial_state=noise_initial_state,
         reward_is_neg_dist=reward_is_neg_dist,
     )

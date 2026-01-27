@@ -6,7 +6,7 @@
 #SBATCH --time=12:00:00
 #SBATCH --mem=4G
 #SBATCH --partition=compute
-#SBATCH --nodelist=smblade24a1
+#SBATCH --nodelist=smblade24a3
 
 export MUJOCO_GL=osmesa  # To enable headless rendering
 
