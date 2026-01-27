@@ -28,15 +28,17 @@ def cleanup_realtime_rendering():
 
 def add_text_overlay(
     frame: np.ndarray,
+    task_name: Optional[str] = None,
     option_idx: Optional[int] = None,
     option_text: Optional[str] = None,
     font_scale: float = 0.5,
     thickness: int = 2,
 ) -> np.ndarray:
-    """Add HRL option info as text overlay on frame.
+    """Add HRL option info and task name as text overlay on frame.
     
     Args:
         frame: RGB frame (numpy array).
+        task_name: Task name to display.
         option_idx: Option index to display.
         option_text: Option name/description to display.
         font_scale: Font scale for text.
@@ -45,25 +47,37 @@ def add_text_overlay(
     Returns:
         Frame with text overlay (copy of original).
     """
-    if option_idx is None and option_text is None:
+    if all(x is None for x in [task_name, option_idx, option_text]):
         return frame
     
     frame = frame.copy()  # Don't modify original
     
-    # Build text string
-    if option_idx is not None and option_text is not None:
-        text = f"Option {option_idx}: {option_text}"
-    elif option_idx is not None:
-        text = f"Option {option_idx}"
-    else:
-        text = option_text
+    y_position = 20
     
-    # Draw text with black outline for visibility
-    position = (10, 30)
-    cv2.putText(frame, text, position, cv2.FONT_HERSHEY_SIMPLEX, 
-                font_scale, (0, 0, 0), thickness + 2)  # Black outline
-    cv2.putText(frame, text, position, cv2.FONT_HERSHEY_SIMPLEX,
-                font_scale, (255, 255, 255), thickness)  # White text
+    # Draw task name
+    if task_name is not None:
+        task_text = f"Task: {task_name}"
+        position = (10, y_position)
+        cv2.putText(frame, task_text, position, cv2.FONT_HERSHEY_SIMPLEX, 
+                    font_scale, (0, 0, 0), thickness + 2)
+        cv2.putText(frame, task_text, position, cv2.FONT_HERSHEY_SIMPLEX,
+                    font_scale, (112, 160, 255), thickness)
+        y_position += 20
+    
+    # Draw option text
+    if option_idx is not None or option_text is not None:
+        # Build option text string
+        if option_idx is not None and option_text is not None:
+            text = f"Option {option_idx}: {option_text}"
+        elif option_idx is not None:
+            text = f"Option {option_idx}"
+        else:
+            text = option_text
+        position = (10, y_position)
+        cv2.putText(frame, text, position, cv2.FONT_HERSHEY_SIMPLEX, 
+                    font_scale, (0, 0, 0), thickness + 2)
+        cv2.putText(frame, text, position, cv2.FONT_HERSHEY_SIMPLEX,
+                    font_scale, (172, 128, 255), thickness)
     
     return frame
 
@@ -72,6 +86,7 @@ def render_frame_realtime(
     env,
     window_name: str,
     delay: float,
+    task_name: Optional[str] = None,
     option_idx: Optional[int] = None,
     option_text: Optional[str] = None,
 ):
@@ -81,11 +96,12 @@ def render_frame_realtime(
         env: The gymnasium environment.
         window_name: Name of the OpenCV window.
         delay: Time to sleep after rendering (seconds).
+        task_name: Optional task name to display as overlay.
         option_idx: Optional option index to display as overlay.
         option_text: Optional option name to display as overlay.
     """
     frame = env.render()
-    frame = add_text_overlay(frame, option_idx, option_text)
+    frame = add_text_overlay(frame, task_name, option_idx, option_text)
     frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
     cv2.imshow(window_name, frame_bgr)
     cv2.waitKey(1)

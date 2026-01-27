@@ -150,7 +150,7 @@ def run_validation_episodes(
         agent: The hierarchical agent (PPO or DQN) to use for action selection.
         num_episodes: Number of validation episodes to run.
         max_episode_steps: Maximum steps per episode.
-        save_first_episode_video: Whether to save a video of the first episode.
+        save_first_episode_video: Whether to save a video of the first episode of validation.
         save_dir: Directory to save the video in (required if save_first_episode_video=True).
         video_prefix: Prefix for the video filename.
     
@@ -175,13 +175,14 @@ def run_validation_episodes(
         episode_had_success = False
         episode_return = 0.0
         
-        # Track option state for video
+        # Track info for overlay
+        task_name = env.unwrapped.cur_task_info['task_name']
         current_option_idx = None
         current_option_name = None
         
         # Render first frame if saving video
         if ep_idx == 0 and save_first_episode_video:
-            frame = add_text_overlay(env.render(), current_option_idx, current_option_name)
+            frame = add_text_overlay(env.render(), task_name, current_option_idx, current_option_name)
             episode_frames = [frame]
         
         done = False
@@ -203,7 +204,7 @@ def run_validation_episodes(
                 if current_active_option is not None:
                     current_option_idx = agent._options.index(current_active_option)
                     current_option_name = current_active_option.name
-                frame = add_text_overlay(env.render(), current_option_idx, current_option_name)
+                frame = add_text_overlay(env.render(), task_name, current_option_idx, current_option_name)
                 episode_frames.append(frame)
             
             # Check task completion
@@ -399,9 +400,12 @@ poetry run pip install "stable_baselines3==2.0.0a1"
     episode_had_completion = False
     current_hl_info = None
     
+    # Get task name for overlay
+    task_name = env.unwrapped.cur_task_info['task_name']
+    
     # Initial render
     if args.render_realtime:
-        render_frame_realtime(env, render_window_name, args.render_delay)
+        render_frame_realtime(env, render_window_name, args.render_delay, task_name=task_name)
 
     # Main training loop
     pbar = tqdm.tqdm(range(start_global_step, start_global_step + args.total_timesteps))
@@ -462,6 +466,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
         if args.render_realtime and agent.active_option is not None:
             render_frame_realtime(
                 env, render_window_name, args.render_delay,
+                task_name=task_name,
                 option_idx=agent._options.index(agent.active_option),
                 option_text=agent.active_option.name,
             )
@@ -491,6 +496,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
             # Reset environment and agent
             ob, info = env.reset()
             agent.reset(ob, info)
+            task_name = env.unwrapped.cur_task_info['task_name']
         else:
             # Store next_obs for potential transition
             current_hl_info['done'] = False
@@ -604,6 +610,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
             # Resets training state after validation
             ob, info = env.reset()
             agent.reset(ob, info)
+            task_name = env.unwrapped.cur_task_info['task_name']
             episode_return = 0.0
             episode_step_count = 0
             episode_had_completion = False
