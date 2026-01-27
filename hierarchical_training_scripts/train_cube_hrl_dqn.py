@@ -58,7 +58,7 @@ class Args:
 
     # Training-specific arguments
     env_id: str = "cube-single-v0"
-    task_id: int = 0  # Fixed task ID for all episodes (0 = default task)
+    task_id: int | None = None  # Fixed task ID for all episodes (None = random)
     noise_initial_state: bool = True
     reward_is_neg_dist: bool = False
     total_timesteps: int = 1000000
@@ -299,7 +299,14 @@ poetry run pip install "stable_baselines3==2.0.0a1"
     logging.info(f"Using device: {device}")
 
     # Environment setup
-    env = make_cube_env(args.env_id, args.seed, args.max_episode_steps, args.task_id, args.noise_initial_state, args.reward_is_neg_dist)
+    env = make_cube_env(
+        env_id=args.env_id,
+        seed=args.seed,
+        max_episode_steps=args.max_episode_steps,
+        task_id=args.task_id,
+        noise_initial_state=args.noise_initial_state,
+        reward_is_neg_dist=args.reward_is_neg_dist,
+    )
     logging.info(f"Using fixed task_id={args.task_id} for all episodes")
     logging.info(f"noise_initial_state={args.noise_initial_state}")
     logging.info(f"reward_is_neg_dist={args.reward_is_neg_dist}")
