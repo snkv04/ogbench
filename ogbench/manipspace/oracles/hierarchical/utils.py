@@ -52,32 +52,37 @@ def add_text_overlay(
     
     frame = frame.copy()  # Don't modify original
     
-    y_position = 20
+    # Construct list of text configs: (text, outline_color, text_color)
+    text_configs = []
     
-    # Draw task name
+    # Add task name if present
     if task_name is not None:
         task_text = f"Task: {task_name}"
-        position = (10, y_position)
-        cv2.putText(frame, task_text, position, cv2.FONT_HERSHEY_SIMPLEX, 
-                    font_scale, (0, 0, 0), thickness + 2)
-        cv2.putText(frame, task_text, position, cv2.FONT_HERSHEY_SIMPLEX,
-                    font_scale, (112, 160, 255), thickness)
-        y_position += 20
+        text_configs.append((task_text, (0, 0, 0), (112, 160, 255)))
     
-    # Draw option text
+    # Add option info if present
     if option_idx is not None or option_text is not None:
-        # Build option text string
+        light_purple_rgb = (172, 128, 255)
         if option_idx is not None and option_text is not None:
-            text = f"Option {option_idx}: {option_text}"
+            line1 = f"Option {option_idx}:"
+            line2 = option_text
+            text_configs.append((line1, (0, 0, 0), light_purple_rgb))
+            text_configs.append((line2, (0, 0, 0), light_purple_rgb))
         elif option_idx is not None:
             text = f"Option {option_idx}"
+            text_configs.append((text, (0, 0, 0), light_purple_rgb))
         else:
-            text = option_text
+            text_configs.append((option_text, (0, 0, 0), light_purple_rgb))
+    
+    # Loop through configs and add text to frame
+    y_position = 20
+    for text, outline_color, text_color in text_configs:
         position = (10, y_position)
         cv2.putText(frame, text, position, cv2.FONT_HERSHEY_SIMPLEX, 
-                    font_scale, (0, 0, 0), thickness + 2)
+                    font_scale, outline_color, thickness + 2)
         cv2.putText(frame, text, position, cv2.FONT_HERSHEY_SIMPLEX,
-                    font_scale, (172, 128, 255), thickness)
+                    font_scale, text_color, thickness)
+        y_position += 20
     
     return frame
 
