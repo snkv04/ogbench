@@ -3,6 +3,7 @@
 #SBATCH --output=/home/svangaru/Desktop/ogbench/slurm_logs/%x_%j.out
 #SBATCH --error=/home/svangaru/Desktop/ogbench/slurm_logs/%x_%j.err
 
+# Works faster on compute node than GPU node for some reason
 #SBATCH --time=12:00:00
 #SBATCH --mem=4G
 #SBATCH --partition=compute
@@ -15,4 +16,4 @@ cd /home/svangaru/Desktop/ogbench/
 python -m hierarchical_training_scripts.train_cube_hrl_dqn \
     --track-with-wandb \
     --save-first-episode-video \
-    --no-noise-initial-state
+    --task-id=0
