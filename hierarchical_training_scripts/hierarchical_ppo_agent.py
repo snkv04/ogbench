@@ -225,7 +225,7 @@ class HierarchicalPPOAgent(HierarchicalAgent):
         options = [
             MoveToPositionOption('move_above_block', env, block_above_pos, block_yaw, gripper_state=-1, min_norm=self._min_norm),
             MoveToPositionOption('move_to_block', env, block_pos, block_yaw, gripper_state=-1, min_norm=self._min_norm),
-            GraspOption('grasp_block', env, block_pos, block_yaw, min_norm=self._min_norm),
+            GraspOption('grasp_block', env),
             LiftVerticallyOption('lift_after_grasp', env, block_pos, target_height=0.36, target_yaw_fn=target_yaw, gripper_state=1, min_norm=self._min_norm),
             MoveToPositionOption('move_above_target', env, target_above_pos, target_yaw, gripper_state=1, min_norm=self._min_norm),
             MoveToPositionOption('move_to_target', env, target_pos, target_yaw, gripper_state=1, min_norm=self._min_norm),

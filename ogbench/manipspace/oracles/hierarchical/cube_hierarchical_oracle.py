@@ -116,16 +116,8 @@ class CubeHierarchicalOracle(HierarchicalAgent):
             )
         )
         
-        # Option 3: Grasp block
-        self._options.append(
-            GraspOption(
-                'grasp_block',
-                self._env,
-                block_pos,
-                block_yaw,
-                min_norm=self._min_norm,
-            )
-        )
+        # Option 3: Grasp block (close gripper without moving)
+        self._options.append(GraspOption('grasp_block', self._env))
         
         # Option 4: Move in the air (lift vertically after grasping)
         def block_base_pos(ob, info):

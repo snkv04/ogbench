@@ -181,6 +181,8 @@ def main():
         agent = CubeHierarchicalOracle(
             env=env,
             max_step=args.max_episode_steps,
+            no_op_option_prob=0.0,
+            suboptimal_option_prob=0.0,
         )
         print("Using CubeHierarchicalOracle agent")
     else:  # hierarchical_random
@@ -264,6 +266,15 @@ def main():
             action = np.clip(action, -1, 1)
             
             next_ob, reward, terminated, truncated, info = env.step(action)
+            # active_opt = agent.active_option
+            # opt_idx = agent._options.index(active_opt) if active_opt is not None else -1
+            # opt_name = active_opt.name if active_opt is not None else "None"
+            # gripper_opening = info['proprio/gripper_opening'][0]
+            # gripper_contact = info['proprio/gripper_contact'][0]
+            # print(f"option_idx={opt_idx}, option={opt_name}")
+            # print(f"gripper_opening={gripper_opening}")
+            # print(f"gripper_contact={gripper_contact}")
+            # print()
             done = terminated or truncated
             episode_return += reward
             # print(f"done = {done}, step = {step}")

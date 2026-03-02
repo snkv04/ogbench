@@ -123,100 +123,61 @@ class LiftVerticallyOption(MoveToPositionOption):
 
 
 class GraspOption(Option):
-    """Option to grasp an object at the current position.
+    """Option to close the gripper (grasp) without moving the arm.
     
-    This option moves to the object, aligns, and closes the gripper.
+    This is effectively the opposite of ReleaseOption: it only changes the
+    gripper state and terminates once the gripper is sufficiently closed.
     """
     
-    def __init__(self, name, env, block_pos_fn, block_yaw_fn, min_norm=0.4,
-                 gain_pos=5, gain_yaw=3, alignment_threshold=0.02):
+    def __init__(self, name, env, closing_threshold: float = 0.55):
         """Initialize the grasp option.
         
         Args:
             name: Option name
             env: Environment instance
-            block_pos_fn: Function (ob, info) -> np.ndarray that returns block position
-            block_yaw_fn: Function (ob, info) -> float that returns block yaw
-            min_norm: Minimum norm for position differences
-            gain_pos: Position gain
-            gain_yaw: Yaw gain
-            alignment_threshold: Position alignment threshold
+            closing_threshold: Threshold on proprio/gripper_opening above which
+                the option is considered to have successfully grasped.
         """
         super().__init__(name, env)
-        self._block_pos_fn = block_pos_fn
-        self._block_yaw_fn = block_yaw_fn
-        self._min_norm = min_norm
-        self._gain_pos = gain_pos
-        self._gain_yaw = gain_yaw
-        self._alignment_threshold = alignment_threshold
-        self._phase = 'move'  # 'move' or 'grasp'
+        self._closing_threshold = closing_threshold
         
-    def shape_diff(self, diff):
-        """Shape the difference vector to have a minimum norm."""
-        diff_norm = np.linalg.norm(diff)
-        if diff_norm >= self._min_norm:
-            return diff
-        else:
-            return diff / (diff_norm + 1e-6) * self._min_norm
-            
     def can_initiate(self, ob, info):
-        """Can initiate if not already grasping."""
+        """Can initiate if not already grasping (based on contact)."""
         gripper_closed = info['proprio/gripper_contact'] > 0.5
         return not gripper_closed
         
     def initiate(self, ob, info):
         """Initialize the option."""
         super().initiate(ob, info)
-        self._phase = 'move'
         
     def select_action(self, ob, info):
-        """Select action for grasping."""
-        effector_pos = info['proprio/effector_pos']
-        effector_yaw = info['proprio/effector_yaw'][0]
-        gripper_closed = info['proprio/gripper_contact'] > 0.5
-        
-        block_pos = self._block_pos_fn(ob, info)
-        block_yaw = self._block_yaw_fn(ob, info)
-        
-        pos_aligned = np.linalg.norm(block_pos - effector_pos) <= self._alignment_threshold
-        
+        """Select action to close the gripper only."""
         action = np.zeros(5)
-        
-        if not pos_aligned or not gripper_closed:
-            # Move to block and align
-            diff = block_pos - effector_pos
-            diff = self.shape_diff(diff)
-            action[:3] = diff[:3] * self._gain_pos
-            action[3] = (block_yaw - effector_yaw) * self._gain_yaw
-            action[4] = 1 if pos_aligned else -1  # Close gripper if aligned
-        else:
-            # Already grasping
-            action[4] = 1
-            
-        return np.clip(action, -1, 1)
+        action[4] = 1  # Close gripper
+        return action
         
     def is_terminated(self, ob, info):
-        """Terminate when gripper is closed and aligned."""
-        effector_pos = info['proprio/effector_pos']
-        block_pos = self._block_pos_fn(ob, info)
-        gripper_closed = info['proprio/gripper_contact'] > 0.5
-        
-        pos_aligned = np.linalg.norm(block_pos - effector_pos) <= self._alignment_threshold
-        return pos_aligned and gripper_closed
+        """Terminate when the gripper is sufficiently closed."""
+        gripper_opening = info['proprio/gripper_opening'][0]
+        gripper_closed = gripper_opening >= self._closing_threshold
+        return gripper_closed
 
 
 class ReleaseOption(Option):
     """Option to release the gripper at the current position."""
     
-    def __init__(self, name, env):
+    def __init__(self, name, env, opening_threshold: float = 0.1):
         """Initialize the release option.
         
         Args:
             name: Option name
             env: Environment instance
+            opening_threshold: Threshold on proprio/gripper_opening below which
+                the option is considered to have successfully released.
         """
         super().__init__(name, env)
-        
+        self._opening_threshold = opening_threshold
+
     def can_initiate(self, ob, info):
         """Can initiate if gripper is closed."""
         gripper_closed = info['proprio/gripper_contact'] > 0.5
@@ -234,7 +195,8 @@ class ReleaseOption(Option):
         
     def is_terminated(self, ob, info):
         """Terminate when gripper is open."""
-        gripper_open = info['proprio/gripper_contact'] < 0.1
+        gripper_opening = info['proprio/gripper_opening'][0]
+        gripper_open = gripper_opening <= self._opening_threshold
         return gripper_open
 
 
