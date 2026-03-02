@@ -187,16 +187,13 @@ class CubeHierarchicalOracle(HierarchicalAgent):
             # Keep x,y at block position, lift z
             return info[f'privileged/block_{self._target_block}_pos']
         
-        def final_yaw_for_lift(ob, info):
-            return self._final_yaw
-        
         self._options.append(
             LiftVerticallyOption(
                 'lift_after_release',
                 self._env,
                 block_base_pos_after_release,
                 target_height=0.32,  # above_threshold * 2 = 0.16 * 2
-                target_yaw_fn=final_yaw_for_lift,
+                target_yaw_fn=target_yaw,
                 gripper_state=-1,  # Keep gripper open
                 min_norm=self._min_norm,
             )
