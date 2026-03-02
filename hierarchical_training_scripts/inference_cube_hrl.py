@@ -245,12 +245,18 @@ def main():
         current_option_name = None
         
         if ep_idx == 0 and args.save_first_episode_video:
-            frame = add_text_overlay(env.render(), current_option_idx, current_option_name)
+            frame = add_text_overlay(env.render(), task_name, current_option_idx, current_option_name)
             episode_frames = [frame]
         
         if args.render_realtime:
-            render_frame_realtime(env, window_name, args.render_delay, 
-                                  current_option_idx, current_option_name)
+            render_frame_realtime(
+                env,
+                window_name,
+                args.render_delay,
+                task_name,
+                current_option_idx,
+                current_option_name,
+            )
         
         done = False
         step = 0
@@ -313,12 +319,18 @@ def main():
             dataset['task_ids'].append(task_id)
             
             if ep_idx == 0 and args.save_first_episode_video:
-                frame = add_text_overlay(env.render(), current_option_idx, current_option_name)
+                frame = add_text_overlay(env.render(), task_name, current_option_idx, current_option_name)
                 episode_frames.append(frame)
             
             if args.render_realtime:
-                render_frame_realtime(env, window_name, args.render_delay,
-                                      current_option_idx, current_option_name)
+                render_frame_realtime(
+                    env,
+                    window_name,
+                    args.render_delay,
+                    task_name,
+                    current_option_idx,
+                    current_option_name,
+                )
             
             ob = next_ob
             step += 1
