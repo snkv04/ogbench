@@ -19,6 +19,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+from torch.nn.utils import clip_grad_norm_
 import tqdm
 import tyro
 from stable_baselines3.common.buffers import ReplayBuffer
@@ -80,6 +81,7 @@ class Args:
     exploration_fraction: float = 0.5
     learning_starts: int = 10000
     train_frequency: int = 4
+    max_grad_norm: float = 1.0
 
     # Saving and loading
     save_dir: str = ".ogbench/dqn_runs"
@@ -535,6 +537,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                 # Optimize the model
                 optimizer.zero_grad()
                 loss.backward()
+                clip_grad_norm_(q_network.parameters(), args.max_grad_norm)
                 optimizer.step()
 
             # Update target network
