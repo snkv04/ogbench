@@ -11,9 +11,24 @@ class MoveToPositionOption(Option):
     can be reused for moving to the block, target, or final position.
     """
     
-    def __init__(self, name, env, target_pos_fn, target_yaw_fn=None, 
-                 gripper_state=-1, min_norm=0.4, gain_pos=5, gain_yaw=3,
-                 termination_threshold=0.04):
+    def __init__(
+        self,
+        name,
+        env,
+        target_pos_fn,
+        target_yaw_fn=None, 
+        gripper_state=-1,
+        min_norm=0.4,
+        gain_pos=5,
+        gain_yaw=3,
+        termination_threshold=0.04,
+        use_position: bool = False,
+        use_yaw: bool = False,
+        yaw_threshold: float = 0.5,
+        use_gripper: bool = False,
+        opening_threshold: float = 0.1,
+        closing_threshold: float = 0.55,
+    ):
         """Initialize the move-to-position option.
         
         Args:
@@ -26,6 +41,12 @@ class MoveToPositionOption(Option):
             gain_pos: Position gain
             gain_yaw: Yaw gain
             termination_threshold: Distance threshold for termination
+            use_position: Whether to use position alignment in reward
+            use_yaw: Whether to use yaw alignment in reward
+            yaw_threshold: Yaw alignment threshold in radians
+            use_gripper: Whether to use gripper state in reward
+            opening_threshold: Threshold below which gripper is considered open
+            closing_threshold: Threshold above which gripper is considered closed
         """
         super().__init__(name, env)
         self._target_pos_fn = target_pos_fn
@@ -35,6 +56,12 @@ class MoveToPositionOption(Option):
         self._gain_pos = gain_pos
         self._gain_yaw = gain_yaw
         self._termination_threshold = termination_threshold
+        self._use_position = use_position
+        self._use_yaw = use_yaw
+        self._yaw_threshold = yaw_threshold
+        self._use_gripper = use_gripper
+        self._opening_threshold = opening_threshold
+        self._closing_threshold = closing_threshold
         
     def shape_diff(self, diff):
         """Shape the difference vector to have a minimum norm."""
@@ -84,6 +111,44 @@ class MoveToPositionOption(Option):
         target_pos = self._target_pos_fn(ob, info)
         distance = np.linalg.norm(target_pos - effector_pos)
         return distance <= self._termination_threshold
+
+    def calculate_reward(self, next_ob, next_info):
+        """Sparse option-completion reward based on configured criteria.
+        
+        Returns:
+            0.0 if all enabled criteria are satisfied, -1.0 otherwise.
+        """
+        success = True
+
+        # Position alignment
+        if self._use_position:
+            effector_pos = next_info['proprio/effector_pos']
+            target_pos = self._target_pos_fn(next_ob, next_info)
+            distance = np.linalg.norm(target_pos - effector_pos)
+            success = success and (distance <= self._termination_threshold)
+
+        # Yaw alignment
+        if self._use_yaw and self._target_yaw_fn is not None:
+            effector_yaw = next_info['proprio/effector_yaw'][0]
+            target_yaw = self._target_yaw_fn(next_ob, next_info)
+            # Shortest angular difference in [-pi, pi]
+            yaw_diff = (target_yaw - effector_yaw + np.pi) % (2 * np.pi) - np.pi
+            success = success and (np.abs(yaw_diff) <= self._yaw_threshold)
+
+        # Gripper state alignment
+        if self._use_gripper:
+            gripper_opening = next_info['proprio/gripper_opening'][0]
+            if self._gripper_state == 1:
+                # Expect closed
+                gripper_ok = gripper_opening >= self._closing_threshold
+            elif self._gripper_state == -1:
+                # Expect open
+                gripper_ok = gripper_opening <= self._opening_threshold
+            else:
+                raise NotImplementedError(f"Gripper state {self._gripper_state} not implemented")
+            success = success and gripper_ok
+
+        return 0.0 if success else -1.0
 
 
 class LiftVerticallyOption(MoveToPositionOption):
@@ -162,6 +227,10 @@ class GraspOption(Option):
         gripper_closed = gripper_opening >= self._closing_threshold
         return gripper_closed
 
+    def calculate_reward(self, next_ob, next_info):
+        """Return 0 if grasp is complete (terminated), -1 otherwise."""
+        return 0.0 if self.is_terminated(next_ob, next_info) else -1.0
+
 
 class ReleaseOption(Option):
     """Option to release the gripper at the current position."""
@@ -198,6 +267,10 @@ class ReleaseOption(Option):
         gripper_opening = info['proprio/gripper_opening'][0]
         gripper_open = gripper_opening <= self._opening_threshold
         return gripper_open
+
+    def calculate_reward(self, next_ob, next_info):
+        """Return 0 if release is complete (terminated), -1 otherwise."""
+        return 0.0 if self.is_terminated(next_ob, next_info) else -1.0
 
 
 class NoOpOption(Option):
