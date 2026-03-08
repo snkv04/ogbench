@@ -5,15 +5,15 @@
 
 # Works faster on compute node than GPU node for some reason
 #SBATCH --time=12:00:00
-#SBATCH --mem=4G
+#SBATCH --mem=64G
 #SBATCH --partition=compute
-#SBATCH --nodelist=smblade24a3
+#SBATCH --nodelist=smblade24a2
 
 export MUJOCO_GL=osmesa  # To enable headless rendering
 
 # Run the training script
 cd /home/svangaru/Desktop/ogbench/
+source venv/bin/activate
 python -m hierarchical_training_scripts.train_cube_hrl_dqn \
     --track-with-wandb \
-    --save-first-episode-video \
-    --task-id=0
+    --save-first-val-episodes-videos=5
