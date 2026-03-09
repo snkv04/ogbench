@@ -14,7 +14,7 @@ export MUJOCO_GL=osmesa  # To enable headless rendering
 # Run the training script
 cd /home/svangaru/Desktop/ogbench/
 source venv/bin/activate
-python -m hierarchical_training_scripts.train_cube_hrl_dqn_profiling \
+python -m hierarchical_training_scripts.train_cube_hrl_dqn \
     --track-with-wandb \
     --save-first-val-episodes-videos=5 \
     --task-id=1 \

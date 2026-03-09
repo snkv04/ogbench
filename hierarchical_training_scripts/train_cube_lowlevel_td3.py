@@ -26,6 +26,12 @@ from tensordict.nn import CudaGraphModule
 from torchrl.data import LazyTensorStorage, ReplayBuffer
 
 import ogbench.manipspace  # Register environments
+from hierarchical_training_scripts.train_cube_hrl_dqn import (
+    _log_param_counts,
+    _prof_checkpoint,
+    _save_profiling_bar_graph,
+    _save_profiling_json,
+)
 from ogbench.manipspace.oracles.hierarchical.utils import make_cube_env
 from ogbench.manipspace.oracles.hierarchical.cube_options import (
     MoveToPositionOption,
@@ -92,6 +98,10 @@ class Args:
 
     reward_option: str = "move_above_block"
     """name of option whose sparse reward to use"""
+
+    # Profiling
+    profiling_start: int = 0
+    profiling_end: int = 1000000
 
 
 def make_env(
@@ -408,6 +418,9 @@ if __name__ == "__main__":
     qnet_params, qnet_target_params, qnet = get_params_qnet()
     actor_params, target_actor_params, target_actor = get_params_actor(actor)
 
+    _log_param_counts("Actor", actor)
+    _log_param_counts("Q-network (per copy)", qnet)
+
     q_optimizer = optim.Adam(
         qnet_params.values(include_nested=True, leaves_only=True),
         lr=args.learning_rate,
@@ -498,6 +511,18 @@ if __name__ == "__main__":
     desc = ""
 
     for global_step in pbar:
+        if global_step >= args.profiling_end:
+            break
+        if global_step == args.profiling_start:
+            args.last_time = time.time()
+            args.profiling_dict = {
+                "select_agent_action": 0.0,
+                "step_env": 0.0,
+                "compute_option_reward": 0.0,
+                "add_transition_to_rb": 0.0,
+                "update_td3_params": 0.0,
+                "log_to_wandb": 0.0,
+            }
         if global_step == args.measure_burnin + args.learning_starts:
             start_time = time.time()
             measure_burnin = global_step
@@ -508,9 +533,11 @@ if __name__ == "__main__":
         else:
             actions = policy(obs=obs)
             actions = actions.clamp(action_low, action_high).cpu().numpy()
+        _prof_checkpoint(args, global_step, "select_agent_action")
 
         # TRY NOT TO MODIFY: execute the game and log data.
         next_obs, rewards, terminations, truncations, infos = envs.step(actions)
+        _prof_checkpoint(args, global_step, "step_env")
         # logging.info(f"global_step = {global_step}")
         # logging.info(f"actions = {actions}")
         # logging.info(f"next_obs = {next_obs}")
@@ -525,7 +552,8 @@ if __name__ == "__main__":
         single_info = _vector_infos_to_single(envs, infos)
         reward_value = float(cube_options[args.reward_option].calculate_reward(single_next_obs, single_info))
         rewards = [reward_value]
-        logging.info(f"reward_value from option {args.reward_option} = {reward_value}")
+        _prof_checkpoint(args, global_step, "compute_option_reward")
+        # logging.info(f"reward_value from option {args.reward_option} = {reward_value}")
 
         # TRY NOT TO MODIFY: record rewards for plotting purposes
         # TODO: Modify to ensure correct handling of end of episode
@@ -561,6 +589,7 @@ if __name__ == "__main__":
         # TRY NOT TO MODIFY: CRUCIAL step easy to overlook
         obs = next_obs
         data = extend_and_sample(transition)
+        _prof_checkpoint(args, global_step, "add_transition_to_rb")
 
         # ALGO LOGIC: training.
         if global_step > args.learning_starts:
@@ -572,6 +601,7 @@ if __name__ == "__main__":
                 # lerp is defined as x' = x + w (y-x), which is equivalent to x' = (1-w) x + w y
                 qnet_target_params.lerp_(qnet_params.data, args.tau)
                 target_actor_params.lerp_(actor_params.data, args.tau)
+            _prof_checkpoint(args, global_step, "update_td3_params")
 
             if global_step % 100 == 0 and start_time is not None:
                 speed = (global_step - measure_burnin) / (time.time() - start_time)
@@ -589,5 +619,17 @@ if __name__ == "__main__":
                     },
                     step=global_step,
                 )
+            _prof_checkpoint(args, global_step, "log_to_wandb")
+
+    # Profiling output
+    if args.profiling_dict is not None:
+        save_path = os.path.join(".ogbench", "td3_profiling", run_name)
+        os.makedirs(save_path, exist_ok=True)
+        _save_profiling_json(
+            args.profiling_dict, save_path, args.profiling_start, args.profiling_end, "TD3"
+        )
+        _save_profiling_bar_graph(
+            args.profiling_dict, save_path, args.profiling_start, args.profiling_end, "TD3"
+        )
 
     envs.close()

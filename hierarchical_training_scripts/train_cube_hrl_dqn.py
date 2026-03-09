@@ -12,6 +12,7 @@ from typing import List, Optional, Tuple
 
 import cv2
 import gymnasium as gym
+import matplotlib.pyplot as plt
 import imageio.v2 as imageio
 from loguru import logger as logging
 import numpy as np
@@ -94,6 +95,67 @@ class Args:
     # Visualization
     render_realtime: bool = False
     render_delay: float = 0.001
+    
+    # Profiling
+    profiling_start: int = 0
+    profiling_end: int = 1000000
+
+
+def _save_profiling_json(
+    profiling_dict: dict[str, float],
+    save_path: str,
+    profiling_start: int,
+    profiling_end: int,
+    algo_name: str,
+) -> None:
+    """Save profiling dictionary to a JSON file."""
+    prof_json_path = os.path.join(save_path, f"prof_{algo_name}_checkpoint_step{profiling_start}_to_{profiling_end}.json")
+    with open(prof_json_path, "w") as f:
+        json.dump(profiling_dict, f, indent=2)
+    logging.info(f"Saved profiling data to {prof_json_path}")
+
+
+def _save_profiling_bar_graph(
+    profiling_dict: dict[str, float],
+    save_path: str,
+    profiling_start: int,
+    profiling_end: int,
+    algo_name: str,
+) -> None:
+    """Save profiling data as a matplotlib bar graph."""
+    prof_steps = profiling_end - profiling_start
+    fig, ax = plt.subplots(figsize=(10, 6))
+    categories = list(profiling_dict.keys())
+    times = list(profiling_dict.values())
+    ax.bar(categories, times)
+    ax.set_xlabel("Category")
+    ax.set_ylabel("Time (seconds)")
+    ax.set_title(f"Dist. of {algo_name} Training Time Across Sections Over {prof_steps} Training Steps")
+    plt.xticks(rotation=45, ha="right")
+    fig.tight_layout()
+    prof_fig_path = os.path.join(save_path, f"prof_{algo_name}_checkpoint_step{profiling_start}_to_{profiling_end}.png")
+    fig.savefig(prof_fig_path)
+    plt.close(fig)
+    logging.info(f"Saved profiling bar graph to {prof_fig_path}")
+
+
+def _log_param_counts(name: str, model: nn.Module) -> None:
+    """Log trainable and total parameter counts for a network."""
+    total = sum(p.numel() for p in model.parameters())
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    non_trainable = total - trainable
+    logging.info(f"{name}: {total:,} total ({trainable:,} trainable, {non_trainable:,} non-trainable)")
+
+
+def _prof_checkpoint(args: Args, global_step: int, category: str) -> None:
+    """Record time since last checkpoint for the given category. Updates args.last_time."""
+    if global_step >= args.profiling_start:
+        assert args.last_time is not None, "last_time must be set before profiling"
+        assert args.profiling_dict is not None, "profiling_dict must be set before profiling"
+        assert category in args.profiling_dict, f"category {category} not found in profiling_dict"
+        now = time.time()
+        args.profiling_dict[category] += now - args.last_time
+        args.last_time = now
 
 
 def linear_schedule(start_e: float, end_e: float, duration: int, t: int):
@@ -338,6 +400,8 @@ poetry run pip install "stable_baselines3==2.0.0a1"
     q_network = QNetwork(obs_dim, num_options, hidden_dim=256).to(device)
     target_network = QNetwork(obs_dim, num_options, hidden_dim=256).to(device)
     target_network.load_state_dict(q_network.state_dict())
+    _log_param_counts("Q-network", q_network)
+    _log_param_counts("Target network", target_network)
     optimizer = optim.Adam(q_network.parameters(), lr=args.learning_rate)
 
     # Replay buffer for high-level transitions
@@ -427,6 +491,22 @@ poetry run pip install "stable_baselines3==2.0.0a1"
     # Main training loop
     pbar = tqdm.tqdm(range(start_global_step, start_global_step + args.total_timesteps))
     for global_step in pbar:
+        if global_step >= args.profiling_end:
+            break
+        if global_step == args.profiling_start:
+            args.last_time = time.time()
+            args.profiling_dict = {
+                "calculate_epsilon": 0.0,
+                "select_agent_action": 0.0,
+                "add_transition_to_rb": 0.0,
+                "step_env": 0.0,
+                "render_realtime": 0.0,
+                "reset_env_on_ep_end": 0.0,
+                "update_dqn_params": 0.0,
+                "log_to_wandb": 0.0,
+                "save_checkpoint": 0.0,
+                "run_validation": 0.0,
+            }
         # Start measuring speed after burn-in
         if global_step == args.learning_starts + args.measure_burnin:
             start_time = time.time()
@@ -435,9 +515,11 @@ poetry run pip install "stable_baselines3==2.0.0a1"
         # Compute epsilon for exploration
         epsilon = linear_schedule(args.start_e, args.end_e, args.exploration_fraction * args.total_timesteps, global_step)
         agent.epsilon = epsilon  # Set epsilon for the agent's select_high_level_action
+        _prof_checkpoint(args, global_step, "calculate_epsilon")
         
         # Execute action using the hierarchical agent (handles option execution automatically)
         low_level_action = agent.select_action(ob, info)
+        _prof_checkpoint(args, global_step, "select_agent_action")
         
         # Check if a new high-level action was selected
         if agent.was_new_option_selected():
@@ -461,9 +543,11 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                 'accumulated_reward': 0.0,
                 'option_length': 0,
             }
+        _prof_checkpoint(args, global_step, "add_transition_to_rb")
         
         # Step environment
         next_ob, reward, terminated, truncated, next_info = env.step(low_level_action)
+        _prof_checkpoint(args, global_step, "step_env")
         current_hl_info['next_obs'] = agent.get_obs_tensor(next_info)
         done = terminated or truncated
         episode_step_count += 1
@@ -487,6 +571,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                 option_idx=agent._options.index(agent.active_option),
                 option_text=agent.active_option.name,
             )
+        _prof_checkpoint(args, global_step, "render_realtime")
 
         # Check if the episode is done
         if done:
@@ -518,6 +603,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
             # Store next_obs for potential transition
             current_hl_info['done'] = False
             ob, info = next_ob, next_info
+        _prof_checkpoint(args, global_step, "reset_env_on_ep_end")
 
         # DQN update
         if global_step >= args.learning_starts:
@@ -546,6 +632,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                     target_network_param.data.copy_(
                         args.tau * q_network_param.data + (1.0 - args.tau) * target_network_param.data
                     )
+        _prof_checkpoint(args, global_step, "update_dqn_params")
 
         # Logging
         if global_step % args.log_freq == 0 and start_time is not None:
@@ -573,6 +660,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
             # Log training metrics to wandb
             if args.track_with_wandb:
                 wandb.log(metrics, step=global_step)
+        _prof_checkpoint(args, global_step, "log_to_wandb")
 
         # Save checkpoint and perform validation
         if (
@@ -594,6 +682,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                 training_metrics=training_metrics,
                 save_path=checkpoint_path
             )
+            _prof_checkpoint(args, global_step, "save_checkpoint")
 
             # Run validation episodes
             assert global_step % args.max_episode_steps == 0, "Validation should run right after an episode ends"
@@ -633,6 +722,16 @@ poetry run pip install "stable_baselines3==2.0.0a1"
             episode_step_count = 0
             episode_had_completion = False
             current_hl_info = None
+            _prof_checkpoint(args, global_step, "run_validation")
+
+    # Profiling output (if profiling was active)
+    if args.profiling_dict is not None:
+        _save_profiling_json(
+            args.profiling_dict, save_path, args.profiling_start, args.profiling_end, "DQN"
+        )
+        _save_profiling_bar_graph(
+            args.profiling_dict, save_path, args.profiling_start, args.profiling_end, "DQN"
+        )
 
     # Cleanup
     env.close()

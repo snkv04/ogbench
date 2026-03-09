@@ -13,7 +13,7 @@ export MUJOCO_GL=osmesa  # To enable headless rendering
 
 # Run the training script
 cd /home/svangaru/Desktop/ogbench/
-python -m hierarchical_training_scripts.train_cube_lowlevel_td3_profiling \
+python -m hierarchical_training_scripts.train_cube_lowlevel_td3 \
     --compile \
     --cudagraphs \
     --task-id=1 \
