@@ -6,7 +6,7 @@
 #SBATCH --time=24:00:00
 #SBATCH --mem=64G
 #SBATCH --partition=gpus
-#SBATCH --nodelist=gpu2001
+#SBATCH --nodelist=gpu2002
 #SBATCH --gres=gpu:4
 
 export MUJOCO_GL=osmesa  # To enable headless rendering

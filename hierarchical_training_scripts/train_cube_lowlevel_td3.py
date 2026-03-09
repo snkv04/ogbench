@@ -139,28 +139,14 @@ def make_env(
     return thunk
 
 
-# ALGO LOGIC: initialize agent here:
-class QNetwork(nn.Module):
-    def __init__(self, n_obs, n_act, device=None):
-        super().__init__()
-        self.fc1 = nn.Linear(n_obs + n_act, 256, device=device)
-        self.fc2 = nn.Linear(256, 256, device=device)
-        self.fc3 = nn.Linear(256, 1, device=device)
-
-    def forward(self, x, a):
-        x = torch.cat([x, a], 1)
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = self.fc3(x)
-        return x
-
-
 class Actor(nn.Module):
-    def __init__(self, n_obs, n_act, env, exploration_noise=1, device=None):
+    def __init__(self, n_obs, n_act, env, exploration_noise=1, device=None, h_dim=128):
         super().__init__()
-        self.fc1 = nn.Linear(n_obs, 256, device=device)
-        self.fc2 = nn.Linear(256, 256, device=device)
-        self.fc_mu = nn.Linear(256, n_act, device=device)
+        self.fc1 = nn.Linear(n_obs, h_dim, device=device)
+        self.fc2 = nn.Linear(h_dim, h_dim, device=device)
+        self.fc3 = nn.Linear(h_dim, h_dim, device=device)
+        self.fc4 = nn.Linear(h_dim, h_dim, device=device)
+        self.fc_mu = nn.Linear(h_dim, n_act, device=device)
         # action rescaling
         self.register_buffer(
             "action_scale",
@@ -173,14 +159,37 @@ class Actor(nn.Module):
         self.register_buffer("exploration_noise", torch.as_tensor(exploration_noise, device=device))
 
     def forward(self, obs):
-        obs = F.relu(self.fc1(obs))
-        obs = F.relu(self.fc2(obs))
-        obs = self.fc_mu(obs).tanh()
-        return obs * self.action_scale + self.action_bias
+        x = F.gelu(self.fc1(obs))
+        x = F.gelu(self.fc2(x))
+        x = F.gelu(self.fc3(x))
+        x = F.gelu(self.fc4(x))
+        x = self.fc_mu(x).tanh()
+        return x * self.action_scale + self.action_bias
 
     def explore(self, obs):
         act = self(obs)
         return act + torch.randn_like(act).mul(self.action_scale * self.exploration_noise)
+
+
+# ALGO LOGIC: initialize agent here:
+class QNetwork(nn.Module):
+    def __init__(self, n_obs, n_act, device=None, h_dim=128):
+        super().__init__()
+        self.fc1 = nn.Linear(n_obs + n_act, h_dim, device=device)
+        self.ln1 = nn.LayerNorm(h_dim, device=device)
+        self.fc2 = nn.Linear(h_dim, h_dim, device=device)
+        self.ln2 = nn.LayerNorm(h_dim, device=device)
+        self.fc3 = nn.Linear(h_dim, h_dim, device=device)
+        self.ln3 = nn.LayerNorm(h_dim, device=device)
+        self.fc_out = nn.Linear(h_dim, 1, device=device)
+
+    def forward(self, x, a):
+        x = torch.cat([x, a], 1)
+        x = self.ln1(F.gelu(self.fc1(x)))
+        x = self.ln2(F.gelu(self.fc2(x)))
+        x = self.ln3(F.gelu(self.fc3(x)))
+        x = self.fc_out(x)
+        return x
 
 
 def _vector_infos_to_single(envs, infos):
