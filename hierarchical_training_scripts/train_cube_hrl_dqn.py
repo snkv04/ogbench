@@ -97,6 +97,7 @@ class Args:
     render_delay: float = 0.001
     
     # Profiling
+    run_profiling: bool = False
     profiling_start: int = 0
     profiling_end: int = 1000000
 
@@ -149,7 +150,7 @@ def _log_param_counts(name: str, model: nn.Module) -> None:
 
 def _prof_checkpoint(args: Args, global_step: int, category: str) -> None:
     """Record time since last checkpoint for the given category. Updates args.last_time."""
-    if global_step >= args.profiling_start:
+    if args.run_profiling and global_step >= args.profiling_start:
         assert args.last_time is not None, "last_time must be set before profiling"
         assert args.profiling_dict is not None, "profiling_dict must be set before profiling"
         assert category in args.profiling_dict, f"category {category} not found in profiling_dict"
@@ -491,22 +492,23 @@ poetry run pip install "stable_baselines3==2.0.0a1"
     # Main training loop
     pbar = tqdm.tqdm(range(start_global_step, start_global_step + args.total_timesteps))
     for global_step in pbar:
-        if global_step >= args.profiling_end:
-            break
-        if global_step == args.profiling_start:
-            args.last_time = time.time()
-            args.profiling_dict = {
-                "calculate_epsilon": 0.0,
-                "select_agent_action": 0.0,
-                "add_transition_to_rb": 0.0,
-                "step_env": 0.0,
-                "render_realtime": 0.0,
-                "reset_env_on_ep_end": 0.0,
-                "update_dqn_params": 0.0,
-                "log_to_wandb": 0.0,
-                "save_checkpoint": 0.0,
-                "run_validation": 0.0,
-            }
+        if args.run_profiling:
+            if global_step >= args.profiling_end:
+                break
+            if global_step == args.profiling_start:
+                args.last_time = time.time()
+                args.profiling_dict = {
+                    "calculate_epsilon": 0.0,
+                    "select_agent_action": 0.0,
+                    "add_transition_to_rb": 0.0,
+                    "step_env": 0.0,
+                    "render_realtime": 0.0,
+                    "reset_env_on_ep_end": 0.0,
+                    "update_dqn_params": 0.0,
+                    "log_to_wandb": 0.0,
+                    "save_checkpoint": 0.0,
+                    "run_validation": 0.0,
+                }
         # Start measuring speed after burn-in
         if global_step == args.learning_starts + args.measure_burnin:
             start_time = time.time()
@@ -725,7 +727,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
             _prof_checkpoint(args, global_step, "run_validation")
 
     # Profiling output (if profiling was active)
-    if args.profiling_dict is not None:
+    if args.run_profiling:
         _save_profiling_json(
             args.profiling_dict, save_path, args.profiling_start, args.profiling_end, "DQN"
         )

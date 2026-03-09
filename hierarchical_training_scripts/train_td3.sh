@@ -16,6 +16,4 @@ cd /home/svangaru/Desktop/ogbench/
 python -m hierarchical_training_scripts.train_cube_lowlevel_td3 \
     --compile \
     --cudagraphs \
-    --task-id=1 \
-    --profiling-start=27000 \
-    --profiling-end=28000
+    --task-id=1
