@@ -43,6 +43,7 @@ def make_maze_env(loco_env_type, maze_env_type, *args, **kwargs):
             success_timing='post',
             ob_type='states',
             add_noise_to_goal=True,
+            add_noise_to_init=True,
             reward_task_id=None,
             use_oracle_rep=False,
             *args,
@@ -59,6 +60,7 @@ def make_maze_env(loco_env_type, maze_env_type, *args, **kwargs):
                     taking the action) or 'post' (after taking the action).
                 ob_type: Observation type. Either 'states' or 'pixels'.
                 add_noise_to_goal: Whether to add noise to the goal position.
+                add_noise_to_init: Whether to add noise to the init position.
                 reward_task_id: Task ID for single-task RL. If this is not None, the environment operates in a
                     single-task mode with the specified task ID. The task ID must be either a valid task ID or 0, where
                     0 means using the default task.
@@ -73,6 +75,7 @@ def make_maze_env(loco_env_type, maze_env_type, *args, **kwargs):
             self._success_timing = success_timing
             self._ob_type = ob_type
             self._add_noise_to_goal = add_noise_to_goal
+            self._add_noise_to_init = add_noise_to_init
             self._reward_task_id = reward_task_id
             self._use_oracle_rep = use_oracle_rep
 
@@ -82,7 +85,8 @@ def make_maze_env(loco_env_type, maze_env_type, *args, **kwargs):
             # Define constants.
             self._offset_x = 4
             self._offset_y = 4
-            self._noise = 1
+            _ant_torso_radius = 0.25  # sphere radius from ant.xml torso_geom
+            self._noise = self._maze_unit / 2 - _ant_torso_radius  # max displacement in meters before hitting a wall
             self._goal_tol = 1.0 if loco_env_type == 'point' else 0.5
 
             # Define maze map.
@@ -399,8 +403,14 @@ def make_maze_env(loco_env_type, maze_env_type, *args, **kwargs):
                 render_goal = options['render_goal']
 
             # Get initial and goal positions with noise.
-            init_xy = self.add_noise(self.ij_to_xy(self.cur_task_info['init_ij']))
-            goal_xy = self.ij_to_xy(self.cur_task_info['goal_ij'])
+            init_xy = self.ij_to_xy(self.cur_task_info['init_ij'])
+            if self._add_noise_to_init:
+                init_xy = self.add_noise(init_xy)
+            if 'goal_xy_offset' in self.cur_task_info:
+                offset = self.cur_task_info['goal_xy_offset']
+                goal_xy = (init_xy[0] + offset[0] * self._maze_unit, init_xy[1] + offset[1] * self._maze_unit)
+            else:
+                goal_xy = self.ij_to_xy(self.cur_task_info['goal_ij'])
             if self._add_noise_to_goal:
                 goal_xy = self.add_noise(goal_xy)
 
@@ -427,6 +437,11 @@ def make_maze_env(loco_env_type, maze_env_type, *args, **kwargs):
             info['goal'] = goal_ob
             if render_goal:
                 info['goal_rendered'] = goal_rendered
+
+            from loguru import logger as _logging
+            _logging.info(
+                f"[MazeEnv.reset] true init_xy={self.get_xy()}  true goal_xy={self.cur_goal_xy}"
+            )
 
             return ob, info
 
@@ -562,8 +577,8 @@ def make_maze_env(loco_env_type, maze_env_type, *args, **kwargs):
             return x, y
 
         def add_noise(self, xy):
-            random_x = np.random.uniform(low=-self._noise, high=self._noise) * self._maze_unit / 4
-            random_y = np.random.uniform(low=-self._noise, high=self._noise) * self._maze_unit / 4
+            random_x = np.random.uniform(low=-self._noise, high=self._noise)
+            random_y = np.random.uniform(low=-self._noise, high=self._noise)
             return xy[0] + random_x, xy[1] + random_y
 
     class BallEnv(MazeEnv):
