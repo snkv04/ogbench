@@ -98,6 +98,8 @@ class Args:
 
     reward_option: str = "move_above_block"
     """name of option whose sparse reward to use"""
+    reward_type: str = 'dense'
+    """reward type to use"""
 
     # Profiling
     run_profiling: bool = False
@@ -193,7 +195,7 @@ def _info_to_obs_14(
 
 
 # TODO: Modify to create options on every reset, to deal with the case that multiple tasks/goals are used
-def _create_cube_options(env, reset_info):
+def _create_cube_options(env, reset_info, args):
     """Create the 9 cube manipulation options used for sparse rewards.
 
     Returns a dict mapping option name to option instance.
@@ -265,6 +267,7 @@ def _create_cube_options(env, reset_info):
             block_yaw,
             gripper_state=-1,
             min_norm=min_norm,
+            reward_type=args.reward_type,
             use_position=True,
             use_yaw=True,
             use_gripper=True,
@@ -276,6 +279,7 @@ def _create_cube_options(env, reset_info):
             block_yaw,
             gripper_state=-1,
             min_norm=min_norm,
+            reward_type=args.reward_type,
             use_position=True,
             use_yaw=True,
             use_gripper=True,
@@ -289,6 +293,7 @@ def _create_cube_options(env, reset_info):
             target_yaw_fn=target_yaw,
             gripper_state=1,
             min_norm=min_norm,
+            reward_type=args.reward_type,
         ),
         MoveToPositionOption(
             "move_above_target",
@@ -297,6 +302,7 @@ def _create_cube_options(env, reset_info):
             target_yaw,
             gripper_state=1,
             min_norm=min_norm,
+            reward_type=args.reward_type,
             use_position=True,
             use_yaw=False,
             use_gripper=True,
@@ -308,6 +314,7 @@ def _create_cube_options(env, reset_info):
             target_yaw,
             gripper_state=1,
             min_norm=min_norm,
+            reward_type=args.reward_type,
             use_position=True,
             use_yaw=False,
             use_gripper=True,
@@ -321,6 +328,7 @@ def _create_cube_options(env, reset_info):
             target_yaw_fn=target_yaw,
             gripper_state=-1,
             min_norm=min_norm,
+            reward_type=args.reward_type,
         ),
         MoveToPositionOption(
             "move_to_final",
@@ -329,6 +337,7 @@ def _create_cube_options(env, reset_info):
             get_final_yaw,
             gripper_state=-1,
             min_norm=min_norm,
+            reward_type=args.reward_type,
             use_position=True,
             use_yaw=False,
             use_gripper=False,
@@ -487,7 +496,7 @@ if __name__ == "__main__":
         device=device,
         dtype=torch.float,
     )
-    cube_options = _create_cube_options(env, reset_info)
+    cube_options = _create_cube_options(env, reset_info, args)
     if args.reward_option not in cube_options:
         raise ValueError(
             f"Unknown reward_option '{args.reward_option}'. "
@@ -624,7 +633,7 @@ if __name__ == "__main__":
                 device=device,
                 dtype=torch.float,
             )
-            cube_options = _create_cube_options(env, reset_info)
+            cube_options = _create_cube_options(env, reset_info, args)
             episode_return = 0.0
             _prof_checkpoint(args, global_step, "reset_env")
 
