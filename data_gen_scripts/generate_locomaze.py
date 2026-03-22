@@ -4,6 +4,7 @@ import pathlib
 from collections import defaultdict
 
 import gymnasium
+import imageio.v2 as imageio
 import numpy as np
 from absl import app, flags
 from agents import SACAgent
@@ -25,6 +26,37 @@ flags.DEFINE_string('save_path', None, 'Save path.')
 flags.DEFINE_float('noise', 0.2, 'Gaussian action noise level.')
 flags.DEFINE_integer('num_episodes', 1000, 'Number of episodes.')
 flags.DEFINE_integer('max_episode_steps', 1001, 'Maximum number of steps in an episode.')
+flags.DEFINE_integer('save_first_episodes_videos', 0, 'Number of first episodes to save as videos (0 = none).')
+
+
+def _save_episode_video(frames, save_dir, filename, fps=30):
+    """Save a list of RGB frames as an mp4 video."""
+    # Check that frames is not empty
+    if not frames:
+        return
+
+    # Ensure RGB: (H, W, 3); imageio expects this for mp4.
+    sample = np.asarray(frames[0])
+    if sample.ndim != 3 or sample.shape[-1] != 3:
+        raise ValueError(
+            f"Expected RGB frames (H, W, 3), got shape {sample.shape}. "
+            "antmaze render() should return (200, 200, 3) uint8."
+        )
+
+    # Saves video frames
+    save_path = pathlib.Path(save_dir)
+    save_path.mkdir(parents=True, exist_ok=True)
+    video_path = save_path / f"{filename}.mp4"
+    with imageio.get_writer(
+        video_path.as_posix(),
+        fps=fps,
+        codec='libx264',
+        quality=8,
+        macro_block_size=None,
+    ) as writer:
+        for frame in frames:
+            writer.append_data(frame)
+    logging.info(f"Saved video to {video_path.as_posix()}")
 
 
 def main(_):
@@ -146,6 +178,9 @@ def main(_):
 
         done = False
         step = 0
+        episode_frames = []
+        if ep_idx < FLAGS.save_first_episodes_videos:
+            episode_frames.append(env.render())
 
         cur_subgoal_dir = None  # Current subgoal direction (only for 'explore').
 
@@ -185,12 +220,29 @@ def main(_):
             dataset['qpos'].append(info['prev_qpos'])
             dataset['qvel'].append(info['prev_qvel'])
 
+            if ep_idx < FLAGS.save_first_episodes_videos:
+                episode_frames.append(env.render())
+
             ob = next_ob
             step += 1
 
         total_steps += step
         if ep_idx < num_train_episodes:
             total_train_steps += step
+
+        if (
+            FLAGS.save_first_episodes_videos > 0
+            and FLAGS.save_path is not None
+            and ep_idx < FLAGS.save_first_episodes_videos
+            and episode_frames
+        ):
+            save_dir = pathlib.Path(FLAGS.save_path).parent.as_posix()
+            _save_episode_video(
+                episode_frames,
+                save_dir=save_dir,
+                filename=f"generate_locomaze_{pathlib.Path(FLAGS.save_path).stem}_episode{ep_idx}",
+                fps=30,
+            )
 
     print('Total steps:', total_steps)
 
