@@ -117,16 +117,19 @@ def make_cube_env(
     env_id: str,
     seed: int,
     max_episode_steps: int,
+    env_mode: str,
     task_id: int | None,
     noise_initial_state: bool = True,
     reward_is_neg_dist: bool = False,
 ):
+    assert env_mode in ["task", "data_collection"], f"Invalid env_mode: {env_mode}"
+    reward_task_id = task_id if env_mode == "task" else None
     env = gym.make(
         env_id,
-        mode='task',
+        mode=env_mode,
         terminate_at_goal=False,
         max_episode_steps=max_episode_steps,
-        reward_task_id=task_id,  # int = fixed task for all episodes, 0 = default task, None = random
+        reward_task_id=reward_task_id,  # int = fixed task for all episodes, 0 = default task, None = random
         noise_initial_state=noise_initial_state,
         reward_is_neg_dist=reward_is_neg_dist,
     )

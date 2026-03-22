@@ -17,4 +17,4 @@ source venv/bin/activate
 python -m hierarchical_training_scripts.train_cube_hrl_dqn \
     --track-with-wandb \
     --save-first-val-episodes-videos=5 \
-    --task-id=1
+    --env-mode=data_collection

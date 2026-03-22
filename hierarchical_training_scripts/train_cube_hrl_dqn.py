@@ -8,7 +8,7 @@ import time
 from datetime import datetime
 from collections import deque
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Literal
 
 import cv2
 import gymnasium as gym
@@ -38,7 +38,10 @@ from ogbench.manipspace.oracles.hierarchical.utils import (
     add_text_overlay,
     save_episode_video,
 )
-from hierarchical_training_scripts.inference_cube_hrl import task_done
+from hierarchical_training_scripts.inference_cube_hrl import (
+    task_done,
+    get_task_name_from_env,
+)
 
 torch.set_float32_matmul_precision("high")
 
@@ -64,6 +67,7 @@ class Args:
     task_id: int | None = None  # int = fixed task for all episodes, 0 = default task, None = random
     noise_initial_state: bool = True
     reward_is_neg_dist: bool = False
+    env_mode: Literal["task", "data_collection"] = "task"
     total_timesteps: int = 1000000
     learning_rate: float = 1e-3
     num_envs: int = 1
@@ -247,7 +251,7 @@ def run_validation_episodes(
         episode_option_return = 0.0
 
         # Track info for overlay
-        task_name = env.unwrapped.cur_task_info['task_name']
+        task_name = get_task_name_from_env(env)
         current_option_idx = None
         current_option_name = None
 
@@ -343,6 +347,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
     
     # Parse arguments
     args = tyro.cli(Args)
+    assert args.env_mode in ["task", "data_collection"], "env_mode must be 'task' or 'data_collection'"
     assert args.num_envs == 1, "Only one environment is supported for hierarchical DQN at the moment"
     args.num_episodes = args.total_timesteps // args.max_episode_steps
     if args.total_timesteps % args.max_episode_steps != 0:
@@ -388,14 +393,19 @@ poetry run pip install "stable_baselines3==2.0.0a1"
         env_id=args.env_id,
         seed=args.seed,
         max_episode_steps=args.max_episode_steps,
+        env_mode=args.env_mode,
         task_id=args.task_id,
         noise_initial_state=args.noise_initial_state,
         reward_is_neg_dist=args.reward_is_neg_dist,
     )
-    if args.task_id is not None:
-        logging.info(f"Using fixed task_id={args.task_id} for all episodes")
+    env_mode = getattr(env.unwrapped, "_mode", "task")
+    if env_mode == "task":
+        if args.task_id is not None:
+            logging.info(f"Using fixed task_id={args.task_id} for all episodes")
+        else:
+            logging.info("Using random task for each episode")
     else:
-        logging.info("Using random task for each episode")
+        logging.info("Environment is in data_collection mode (no fixed task_id).")
     logging.info(f"noise_initial_state={args.noise_initial_state}")
     logging.info(f"reward_is_neg_dist={args.reward_is_neg_dist}")
 
@@ -406,6 +416,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
 
     # Calculate number of options based on configuration
     if args.goal_conditioned_options:
+        assert args.env_mode == "task", "goal_conditioned_options only supported in task mode"
         num_tasks = len(env.unwrapped.task_infos)
         # 6 shared options + 3 goal-conditioned options per task + 1 optional no-op
         num_options = 6 + (3 * num_tasks) + (1 if not args.disable_no_op else 0)
@@ -501,7 +512,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
     current_hl_info = None
     
     # Get task name for overlay
-    task_name = env.unwrapped.cur_task_info['task_name']
+    task_name = get_task_name_from_env(env)
     
     # Initial render
     if args.render_realtime:
@@ -618,7 +629,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
             # Reset environment and agent
             ob, info = env.reset()
             agent.reset(ob, info)
-            task_name = env.unwrapped.cur_task_info['task_name']
+            task_name = get_task_name_from_env(env)
         else:
             # Store next_obs for potential transition
             current_hl_info['done'] = False
@@ -737,7 +748,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
             # Resets training state after validation
             ob, info = env.reset()
             agent.reset(ob, info)
-            task_name = env.unwrapped.cur_task_info['task_name']
+            task_name = get_task_name_from_env(env)
             episode_return = 0.0
             episode_step_count = 0
             episode_had_completion = False

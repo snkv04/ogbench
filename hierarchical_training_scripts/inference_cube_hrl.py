@@ -36,6 +36,7 @@ from hierarchical_training_scripts.hierarchical_dqn_agent import (
 from ogbench.manipspace.oracles.hierarchical.utils import (
     add_text_overlay,
     save_episode_video,
+    make_cube_env,
 )
 
 
@@ -53,7 +54,7 @@ class Args:
     end_e: float = 0.05  # Final epsilon-greedy exploration rate from training
 
     # Agent-specific arguments
-    disable_no_op: bool = False
+    disable_no_op: bool = True
     no_op_duration: int = 10
 
     # Environment
@@ -62,6 +63,7 @@ class Args:
     task_id: int = 0  # Fixed task ID for all episodes (0 = default task)
     noise_initial_state: bool = True
     reward_is_neg_dist: bool = False
+    env_mode: Literal["task", "data_collection"] = "task"
     
     # Dataset generation
     num_episodes: int = 1000
@@ -81,15 +83,41 @@ class Args:
 
 
 def task_done(env, info, threshold: float = 0.04) -> bool:
-    # In task mode, target_block is always 0 for cube-single
-    target_block = 0
-    target_pos = env.unwrapped.cur_task_info['goal_xyzs'][target_block]
-    block_pos = info[f'privileged/block_{target_block}_pos']
+    unwrapped = env.unwrapped
+    mode = getattr(unwrapped, "_mode", "task")
+
+    if mode == "data_collection":
+        target_block = int(info['privileged/target_block'])
+        target_pos = info['privileged/target_block_pos']
+        block_pos = info[f'privileged/block_{target_block}_pos']
+    elif mode == "task":
+        target_block = 0
+        target_pos = unwrapped.cur_task_info['goal_xyzs'][target_block]
+        block_pos = info[f'privileged/block_{target_block}_pos']
+    else:
+        raise ValueError(f"Invalid mode: {mode}")
+
     return np.linalg.norm(target_pos - block_pos) <= threshold
+
+
+def get_task_name_from_env(env) -> str:
+    """Return a short task name for frame overlays, depending on env mode."""
+    unwrapped = env.unwrapped
+    mode = getattr(unwrapped, "_mode", "task")
+    if mode == "data_collection":
+        return "data_collection"
+    else:
+        if not hasattr(unwrapped, "cur_task_info"):
+            raise AttributeError("Expected env.unwrapped.cur_task_info to be present in task mode")
+        cur_info = unwrapped.cur_task_info
+        if not isinstance(cur_info, dict) or "task_name" not in cur_info:
+            raise ValueError("Expected cur_task_info to be a dict with a 'task_name' key in task mode")
+        return cur_info["task_name"]
 
 
 def main():
     args = tyro.cli(Args)
+    assert args.env_mode in ["task", "data_collection"], "env_mode must be 'task' or 'data_collection'"
     
     if args.agent_type in ["hierarchical_ppo", "hierarchical_dqn"]:
         assert args.checkpoint_path, f"Must provide --checkpoint_path for {args.agent_type} agent"
@@ -126,17 +154,21 @@ def main():
         checkpoint = torch.load(args.checkpoint_path, map_location=device, weights_only=False)
         print(f"Checkpoint trained for {checkpoint['global_step']} steps")
     
-    # Initialize environment in task mode with fixed task
-    env = gymnasium.make(
-        args.env_name,
-        terminate_at_goal=False,
-        mode='task',
-        reward_task_id=args.task_id,  # Fixed task for all episodes
+    # Initialize environment via make_cube_env
+    env = make_cube_env(
+        env_id=args.env_name,
+        seed=args.seed,
         max_episode_steps=args.max_episode_steps,
+        env_mode=args.env_mode,
+        task_id=args.task_id,
         noise_initial_state=args.noise_initial_state,
         reward_is_neg_dist=args.reward_is_neg_dist,
     )
-    print(f"Using fixed task_id={args.task_id} for all episodes")
+    env_mode = getattr(env.unwrapped, "_mode", "task")
+    if env_mode == "task":
+        print(f"Using fixed task_id={args.task_id} for all episodes")
+    else:
+        print("Environment is in data_collection mode (reward_task_id is ignored).")
     print(f"noise_initial_state={args.noise_initial_state}")
     print(f"reward_is_neg_dist={args.reward_is_neg_dist}")
     
@@ -232,8 +264,8 @@ def main():
         agent.reset(ob, info)
         
         # Get current task info
-        task_id = env.unwrapped.cur_task_id
-        task_name = env.unwrapped.cur_task_info['task_name']
+        task_id = env.unwrapped.cur_task_id if env_mode == "task" else -1
+        task_name = get_task_name_from_env(env)
         per_task_stats[task_id]['attempted'] += 1
         tasks_attempted += 1  # Each episode starts with one task
         episode_had_success = False
@@ -377,7 +409,7 @@ def main():
     print(f'\nPer-task statistics:')
     for task_id in sorted(per_task_stats.keys()):
         stats = per_task_stats[task_id]
-        task_name = env.unwrapped.task_infos[task_id - 1]['task_name']
+        task_name = env.unwrapped.task_infos[task_id - 1]['task_name'] if env_mode == "task" else "data_collection"
         avg_return = np.mean(stats['episode_returns']) if stats['episode_returns'] else 0.0
         print(f'  Task {task_id} ({task_name}):')
         print(f'    Average return: {avg_return:.2f}')
