@@ -9,7 +9,7 @@ import random
 import time
 from collections import deque
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Tuple
 
 import gymnasium as gym
 from loguru import logger as logging
@@ -140,12 +140,10 @@ def make_env(
 
 
 class Actor(nn.Module):
-    def __init__(self, n_obs, n_act, env, exploration_noise=1, device=None, h_dim=128):
+    def __init__(self, n_obs, n_act, env, exploration_noise=1, device=None, h_dim=256):
         super().__init__()
         self.fc1 = nn.Linear(n_obs, h_dim, device=device)
         self.fc2 = nn.Linear(h_dim, h_dim, device=device)
-        self.fc3 = nn.Linear(h_dim, h_dim, device=device)
-        self.fc4 = nn.Linear(h_dim, h_dim, device=device)
         self.fc_mu = nn.Linear(h_dim, n_act, device=device)
         # action rescaling
         self.register_buffer(
@@ -159,12 +157,10 @@ class Actor(nn.Module):
         self.register_buffer("exploration_noise", torch.as_tensor(exploration_noise, device=device))
 
     def forward(self, obs):
-        x = F.gelu(self.fc1(obs))
-        x = F.gelu(self.fc2(x))
-        x = F.gelu(self.fc3(x))
-        x = F.gelu(self.fc4(x))
-        x = self.fc_mu(x).tanh()
-        return x * self.action_scale + self.action_bias
+        obs = F.relu(self.fc1(obs))
+        obs = F.relu(self.fc2(obs))
+        obs = self.fc_mu(obs).tanh()
+        return obs * self.action_scale + self.action_bias
 
     def explore(self, obs):
         act = self(obs)
@@ -173,23 +169,61 @@ class Actor(nn.Module):
 
 # ALGO LOGIC: initialize agent here:
 class QNetwork(nn.Module):
-    def __init__(self, n_obs, n_act, device=None, h_dim=128):
+    def __init__(self, n_obs, n_act, device=None, h_dim=256):
         super().__init__()
         self.fc1 = nn.Linear(n_obs + n_act, h_dim, device=device)
-        self.ln1 = nn.LayerNorm(h_dim, device=device)
         self.fc2 = nn.Linear(h_dim, h_dim, device=device)
-        self.ln2 = nn.LayerNorm(h_dim, device=device)
-        self.fc3 = nn.Linear(h_dim, h_dim, device=device)
-        self.ln3 = nn.LayerNorm(h_dim, device=device)
-        self.fc_out = nn.Linear(h_dim, 1, device=device)
+        self.fc3 = nn.Linear(h_dim, 1, device=device)
 
     def forward(self, x, a):
         x = torch.cat([x, a], 1)
-        x = self.ln1(F.gelu(self.fc1(x)))
-        x = self.ln2(F.gelu(self.fc2(x)))
-        x = self.ln3(F.gelu(self.fc3(x)))
-        x = self.fc_out(x)
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
         return x
+
+
+# Size-14 observation (same structure as HierarchicalDQNAgent.get_obs_tensor)
+OBS_DIM = 14
+
+
+# This is called every time the env is reset, so it gets the new target correctly
+def _get_target_from_info(env, info: dict) -> Tuple[int, np.ndarray, float]:
+    """Get (target_block, target_pos, target_yaw) for the current episode from env and info."""
+    unwrapped = env.unwrapped
+    if getattr(unwrapped, "_mode", None) == "data_collection":
+        target_block = info["privileged/target_block"]
+        target_pos = info["privileged/target_block_pos"].copy()
+        target_yaw = float(info["privileged/target_block_yaw"][0])
+    else:
+        target_block = 0
+        target_pos = unwrapped.cur_task_info["goal_xyzs"][target_block].copy()
+        target_yaw = 0.0
+    return target_block, target_pos, target_yaw
+
+
+def _info_to_obs_14(
+    info: dict,
+    target_block: int,
+    target_pos: np.ndarray,
+    target_yaw: float,
+) -> np.ndarray:
+    """Build the 14-dim observation from info and episode target (effector, gripper, block, target)."""
+    return np.concatenate([
+        # End-effector
+        info["proprio/effector_pos"],
+        np.atleast_1d(info["proprio/effector_yaw"]),
+        np.atleast_1d(info["proprio/gripper_opening"]),
+        np.atleast_1d(info["proprio/gripper_contact"]),
+        
+        # Block
+        info[f"privileged/block_{target_block}_pos"],
+        np.atleast_1d(info[f"privileged/block_{target_block}_yaw"]),
+
+        # Target
+        target_pos,
+        np.atleast_1d(np.float64(target_yaw)),
+    ]).astype(np.float32)
 
 
 def _vector_infos_to_single(envs, infos):
@@ -392,12 +426,19 @@ if __name__ == "__main__":
             )
         ]
     )
+    # Use size-14 obs space (same structure as DQN high-level obs) via _info_to_obs_14
+    envs.single_observation_space = gym.spaces.Box(
+        low=-np.inf,
+        high=np.inf,
+        shape=(OBS_DIM,),
+        dtype=np.float32,
+    )
     n_act = math.prod(envs.single_action_space.shape)
-    n_obs = math.prod(envs.single_observation_space.shape)
+    n_obs = OBS_DIM
     action_low, action_high = float(envs.single_action_space.low[0]), float(envs.single_action_space.high[0])
     assert isinstance(envs.single_action_space, gym.spaces.Box), "only continuous action space is supported"
     logging.info(f"action space: {envs.single_action_space}")
-    logging.info(f"observation space: {envs.single_observation_space}")
+    logging.info(f"observation space (patched): {envs.single_observation_space}")
 
     actor = Actor(env=envs, n_obs=n_obs, n_act=n_act, device=device, exploration_noise=args.exploration_noise)
     actor_detach = Actor(env=envs, n_obs=n_obs, n_act=n_act, device=device, exploration_noise=args.exploration_noise)
@@ -506,14 +547,19 @@ if __name__ == "__main__":
 
     # TRY NOT TO MODIFY: start the game
     obs, reset_infos = envs.reset(seed=args.seed)
-    reset_info = _vector_infos_to_single(envs, reset_infos)
+    single_env, reset_info = envs.envs[0], _vector_infos_to_single(envs, reset_infos)
+    target_block, target_pos, target_yaw = _get_target_from_info(single_env, reset_info)
+    obs = torch.as_tensor(
+        _info_to_obs_14(reset_info, target_block, target_pos, target_yaw).reshape(1, -1),
+        device=device,
+        dtype=torch.float,
+    )
     cube_options = _create_cube_options(envs, reset_info)
     if args.reward_option not in cube_options:
         raise ValueError(
             f"Unknown reward_option '{args.reward_option}'. "
             f"Available: {list(cube_options.keys())}"
         )
-    obs = torch.as_tensor(obs, device=device, dtype=torch.float)
     pbar = tqdm.tqdm(range(args.total_timesteps))
     start_time = None
     max_ep_ret = -float("inf")
@@ -548,6 +594,35 @@ if __name__ == "__main__":
 
         # TRY NOT TO MODIFY: execute the game and log data.
         next_obs, rewards, terminations, truncations, infos = envs.step(actions)
+        single_info = _vector_infos_to_single(envs, infos)
+        if (
+            (np.any(terminations) if isinstance(terminations, np.ndarray) else terminations) or
+            (np.any(truncations) if isinstance(truncations, np.ndarray) else truncations)
+        ):
+            target_block, target_pos, target_yaw = _get_target_from_info(single_env, single_info)
+        next_obs = torch.as_tensor(
+            _info_to_obs_14(single_info, target_block, target_pos, target_yaw).reshape(1, -1),
+            device=device,
+            dtype=torch.float,
+        )
+        # logging.info(f"just stepped, infos.keys() = {list(infos.keys())}")
+        # if "final_info" in infos:
+        #     logging.info("final_info in infos")
+        # if "final_observation" in infos:
+        #     logging.info("final_observation in infos")
+
+        # Convert next_obs to 14-dim; handle episode boundary and final_obs for bootstrap
+        final_obs_14 = None
+        if "final_observation" in infos and (np.any(truncations) if isinstance(truncations, np.ndarray) else truncations):
+            final_info = infos["final_info"]
+            idx = 0  # single env
+            fb, fp, fy = _get_target_from_info(single_env, final_info[idx])
+            final_obs_14 = torch.as_tensor(
+                _info_to_obs_14(final_info[idx], fb, fp, fy),
+                device=device,
+                dtype=torch.float,
+            ).unsqueeze(0)
+
         _prof_checkpoint(args, global_step, "step_env")
         # logging.info(f"global_step = {global_step}")
         # logging.info(f"actions = {actions}")
@@ -560,7 +635,6 @@ if __name__ == "__main__":
 
         # Replace environment rewards with sparse option-based reward from selected option
         single_next_obs = next_obs[0]
-        single_info = _vector_infos_to_single(envs, infos)
         reward_value = float(cube_options[args.reward_option].calculate_reward(single_next_obs, single_info))
         rewards = [reward_value]
         _prof_checkpoint(args, global_step, "compute_option_reward")
@@ -578,13 +652,9 @@ if __name__ == "__main__":
             )
 
         # TRY NOT TO MODIFY: save data to replay buffer; handle `final_observation`
-        next_obs = torch.as_tensor(next_obs, device=device, dtype=torch.float)
         real_next_obs = next_obs.clone()
-        # TODO: Modify to ensure correct handling of end of episode
-        if "final_observation" in infos:
-            real_next_obs[truncations] = torch.as_tensor(
-                np.asarray(list(infos["final_observation"][truncations]), dtype=np.float32), device=device, dtype=torch.float
-            )
+        if final_obs_14 is not None:
+            real_next_obs[truncations] = final_obs_14
         # obs = torch.as_tensor(obs, device=device, dtype=torch.float)
         transition = TensorDict(
             observations=obs,
