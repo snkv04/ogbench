@@ -205,6 +205,7 @@ def run_validation_episodes(
     agent,
     num_episodes: int,
     max_episode_steps: int,
+    option=None,
     num_episode_videos: int = 0,
     save_dir: Optional[str] = None,
     video_prefix: str = "validation",
@@ -216,6 +217,8 @@ def run_validation_episodes(
         agent: The hierarchical agent (PPO or DQN) to use for action selection.
         num_episodes: Number of validation episodes to run.
         max_episode_steps: Maximum steps per episode.
+        option: Optional Option instance whose reward will be used to compute
+            an additional episode return metric (option-based reward).
         num_episode_videos: Number of validation episode videos to save (first N episodes). 0 = none.
         save_dir: Directory to save videos in (required if num_episode_videos > 0).
         video_prefix: Prefix for the video filenames.
@@ -225,12 +228,14 @@ def run_validation_episodes(
             - 'success_rate': Success rate (tasks completed at end of episode)
             - 'completion_rate': Completion rate (tasks completed at any point)
             - 'avg_episode_return': Average episode return across validation episodes
+            - 'avg_episode_option_return': Average option-based episode return
             - 'num_episodes': Number of episodes run
     """
     tasks_completed_at_end = 0
     tasks_completed_at_all = 0
     tasks_attempted = 0
     episode_returns = []
+    episode_option_returns = []
 
     for ep_idx in tqdm.tqdm(range(num_episodes), desc="Running validation episodes"):
         ob, info = env.reset()
@@ -239,6 +244,7 @@ def run_validation_episodes(
         tasks_attempted += 1
         episode_had_success = False
         episode_return = 0.0
+        episode_option_return = 0.0
 
         # Track info for overlay
         task_name = env.unwrapped.cur_task_info['task_name']
@@ -264,6 +270,12 @@ def run_validation_episodes(
             done = terminated or truncated
             episode_return += reward
 
+            # Option-based reward accumulation (if provided)
+            if option is not None:
+                # Use environment observation for option reward calculation
+                opt_reward = option.calculate_reward(next_ob, info)
+                episode_option_return += float(opt_reward)
+
             # Track option info for video
             if save_this_episode_video:
                 current_active_option = agent.active_option
@@ -286,6 +298,8 @@ def run_validation_episodes(
 
         assert step == max_episode_steps, "Each episode should last its full length"
         episode_returns.append(episode_return)
+        if option is not None:
+            episode_option_returns.append(episode_option_return)
 
         # Save this episode's video if requested
         if save_this_episode_video:
@@ -303,11 +317,15 @@ def run_validation_episodes(
     success_rate = tasks_completed_at_end / tasks_attempted if tasks_attempted > 0 else 0.0
     completion_rate = tasks_completed_at_all / tasks_attempted if tasks_attempted > 0 else 0.0
     avg_episode_return = np.mean(episode_returns) if episode_returns else 0.0
+    avg_episode_option_return = (
+        np.mean(episode_option_returns) if episode_option_returns and option is not None else 0.0
+    )
     
     return {
         'success_rate': success_rate,
         'completion_rate': completion_rate,
         'avg_episode_return': avg_episode_return,
+        'avg_episode_option_return': avg_episode_option_return,
         'num_episodes': num_episodes,
     }
 

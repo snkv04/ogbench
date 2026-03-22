@@ -31,7 +31,9 @@ from hierarchical_training_scripts.train_cube_hrl_dqn import (
     _prof_checkpoint,
     _save_profiling_bar_graph,
     _save_profiling_json,
+    run_validation_episodes,
 )
+from ogbench.manipspace.oracles.hierarchical.hierarchical_agent import HierarchicalAgent
 from ogbench.manipspace.oracles.hierarchical.utils import make_cube_env
 from ogbench.manipspace.oracles.hierarchical.cube_options import (
     MoveToPositionOption,
@@ -101,6 +103,14 @@ class Args:
     reward_type: str = 'dense'
     """reward type to use"""
 
+    # Validation
+    validation_freq: int = 50_000
+    """how often (in env steps) to run validation"""
+    num_validation_episodes: int = 100
+    """number of episodes to run validation for"""
+    num_episode_videos: int = 5
+    """number of episode videos to save"""
+
     # Profiling
     run_profiling: bool = False
     profiling_start: int = 0
@@ -153,6 +163,47 @@ class QNetwork(nn.Module):
 
 # Size-14 observation (same structure as HierarchicalDQNAgent.get_obs_tensor)
 OBS_DIM = 14
+
+
+class LowLevelTD3Agent(HierarchicalAgent):
+    """HierarchicalAgent-compatible wrapper around the TD3 policy.
+
+    This agent exposes only primitive low-level actions (no options) so it can be
+    used with `run_validation_episodes`, which expects a hierarchical-style agent
+    interface (reset/select_action/active_option/_options).
+    """
+
+    def __init__(self, env, actor, device, action_low: float, action_high: float):
+        # Initialize base HierarchicalAgent with no options
+        super().__init__(options=None, env=env)
+
+        # TD3-specific components
+        self.env = env
+        self.actor = actor
+        self.device = device
+        self.action_low = action_low
+        self.action_high = action_high
+
+        # Episode-specific target info
+        self._target_block = 0
+        self._target_pos = None
+        self._target_yaw = 0.0
+
+    def reset(self, ob, info):
+        """Called at the start of each validation episode."""
+        super().reset(ob, info)
+        self._target_block, self._target_pos, self._target_yaw = _get_target_from_info(self.env, info)
+
+    def select_action(self, ob, info):
+        """Select a deterministic TD3 action given env info."""
+        obs_tensor = torch.as_tensor(
+            _info_to_obs_14(info, self._target_block, self._target_pos, self._target_yaw).reshape(1, -1),
+            device=self.device,
+            dtype=torch.float,
+        )
+        with torch.no_grad():
+            action_tensor = self.actor(obs_tensor).clamp(self.action_low, self.action_high)
+        return action_tensor[0].cpu().numpy()
 
 
 # This is called every time the env is reset, so it gets the new target correctly
@@ -488,6 +539,9 @@ if __name__ == "__main__":
         update_pol = CudaGraphModule(update_pol, in_keys=[], out_keys=[], warmup=5)
         policy = CudaGraphModule(policy)
 
+    # Validation agent (uses deterministic actor)
+    val_agent = LowLevelTD3Agent(env=env, actor=actor, device=device, action_low=action_low, action_high=action_high)
+
     # TRY NOT TO MODIFY: start the game
     obs_raw, reset_info = env.reset(seed=args.seed)
     target_block, target_pos, target_yaw = _get_target_from_info(env, reset_info)
@@ -636,6 +690,46 @@ if __name__ == "__main__":
             cube_options = _create_cube_options(env, reset_info, args)
             episode_return = 0.0
             _prof_checkpoint(args, global_step, "reset_env")
+
+        # Optional validation at fixed step intervals
+        if global_step > args.learning_starts and global_step % args.validation_freq == 0:
+            logging.info(f"Running validation with  {len(avg_returns)} recent-episode window at step {global_step}...")
+
+            # Switch to eval mode
+            actor.eval()
+            qnet.eval()
+
+            val_metrics = run_validation_episodes(
+                env=env,
+                agent=val_agent,
+                num_episodes=args.num_validation_episodes,
+                max_episode_steps=args.max_episode_steps,
+                option=cube_options[args.reward_option],
+                num_episode_videos=args.num_episode_videos,
+                save_dir=os.path.join(".ogbench", "td3_runs", run_name, "validation"),
+                video_prefix=f"validation_step{global_step}",
+            )
+
+            # Switch back to train mode
+            actor.train()
+            qnet.train()
+
+            # Log validation metrics
+            logging.info(f"Validation results (step {global_step}):")
+            logging.info(f"    success_rate={val_metrics['success_rate']:.2%}")
+            logging.info(f"    completion_rate={val_metrics['completion_rate']:.2%}")
+            logging.info(f"    avg_episode_return={val_metrics['avg_episode_return']:.2f}")
+            logging.info(f"    avg_episode_option_return={val_metrics['avg_episode_option_return']:.2f}")
+
+            wandb.log(
+                {
+                    "val/success_rate": float(val_metrics["success_rate"]),
+                    "val/completion_rate": float(val_metrics["completion_rate"]),
+                    "val/avg_episode_return": float(val_metrics["avg_episode_return"]),
+                    "val/avg_episode_option_return": float(val_metrics["avg_episode_option_return"]),
+                },
+                step=global_step,
+            )
 
     # Profiling output
     if args.run_profiling:
