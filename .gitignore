@@ -12,3 +12,4 @@ venv*/
 slurm_logs/
 *.log
 wandb/
+experts

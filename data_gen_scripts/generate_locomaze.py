@@ -10,6 +10,7 @@ from agents import SACAgent
 from tqdm import trange
 from utils.evaluation import supply_rng
 from utils.flax_utils import restore_agent
+from loguru import logger as logging
 
 import ogbench.locomaze  # noqa
 
@@ -41,29 +42,33 @@ def main(_):
     )
     ob_dim = env.observation_space.shape[0]
 
-    # Initialize oracle agent.
+    # Initialize oracle / policy.
     if 'point' in FLAGS.env_name:
 
         def actor_fn(ob, temperature):
             return ob[-2:]
     else:
-        # Load agent config.
-        restore_path = FLAGS.restore_path
-        candidates = glob.glob(restore_path)
-        assert len(candidates) == 1, f'Found {len(candidates)} candidates: {candidates}'
+        # # Load agent config.
+        # restore_path = FLAGS.restore_path
+        # candidates = glob.glob(restore_path)
+        # assert len(candidates) == 1, f'Found {len(candidates)} candidates: {candidates}'
 
-        with open(candidates[0] + '/flags.json', 'r') as f:
-            agent_config = json.load(f)['agent']
+        # with open(candidates[0] + '/flags.json', 'r') as f:
+        #     agent_config = json.load(f)['agent']
 
-        # Load agent.
-        agent = SACAgent.create(
-            FLAGS.seed,
-            np.zeros(ob_dim),
-            env.action_space.sample(),
-            agent_config,
-        )
-        agent = restore_agent(agent, FLAGS.restore_path, FLAGS.restore_epoch)
-        actor_fn = supply_rng(agent.sample_actions, rng=agent.rng)
+        # # Load agent.
+        # agent = SACAgent.create(
+        #     FLAGS.seed,
+        #     np.zeros(ob_dim),
+        #     env.action_space.sample(),
+        #     agent_config,
+        # )
+        # agent = restore_agent(agent, FLAGS.restore_path, FLAGS.restore_epoch)
+        # actor_fn = supply_rng(agent.sample_actions, rng=agent.rng)
+
+        # New behavior: use a random action policy over the environment's action space.
+        def actor_fn(ob, temperature):
+            return env.action_space.sample()
 
     # Store all empty cells and vertex cells.
     all_cells = []

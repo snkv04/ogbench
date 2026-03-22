@@ -15,7 +15,7 @@ uv pip sync dependencies/environment.yaml
 
 To install additional dependencies that were not already saved with `uv`:
 ```
-uv pip install torch tyro wandb loguru stable-baselines3 tensordict torchrl
+uv pip install torch tyro wandb loguru stable-baselines3 tensordict torchrl flax ml-collections distrax
 ```
 
 ### Training script
