@@ -74,7 +74,7 @@ class Args:
     noise: float = 0.0
     
     # Visualization
-    save_first_episode_video: bool = False
+    save_first_episodes_videos: int = 0
     render_realtime: bool = False
     render_delay: float = 0.001
     
@@ -276,7 +276,7 @@ def main():
         current_option_idx = None
         current_option_name = None
         
-        if ep_idx == 0 and args.save_first_episode_video:
+        if ep_idx < args.save_first_episodes_videos:
             frame = add_text_overlay(env.render(), task_name, current_option_idx, current_option_name)
             episode_frames = [frame]
         
@@ -350,7 +350,7 @@ def main():
             dataset['qvel'].append(info['prev_qvel'])
             dataset['task_ids'].append(task_id)
             
-            if ep_idx == 0 and args.save_first_episode_video:
+            if ep_idx < args.save_first_episodes_videos:
                 frame = add_text_overlay(env.render(), task_name, current_option_idx, current_option_name)
                 episode_frames.append(frame)
             
@@ -377,13 +377,15 @@ def main():
             total_train_steps += step
         
         # Save first episode video
-        if (args.save_first_episode_video and args.save_path is not None 
-            and ep_idx == 0 and episode_frames):
+        if (
+            args.save_first_episodes_videos > 0 and args.save_path is not None 
+            and ep_idx < args.save_first_episodes_videos and episode_frames
+        ):
             save_base = pathlib.Path(args.save_path)
             save_episode_video(
                 episode_frames,
                 save_dir=save_base.parent.as_posix(),
-                filename=f"inference_{save_base.stem}_first_episode",
+                filename=f"inference_{save_base.stem}_episode{ep_idx}",
                 fps=30,
             )
     
