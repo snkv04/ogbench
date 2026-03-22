@@ -105,40 +105,6 @@ class Args:
     profiling_end: int = 1000000
 
 
-def make_env(
-    env_id: str,
-    seed: int,
-    idx: int,
-    capture_video: bool,
-    run_name: str,
-    max_episode_steps: int,
-    task_id: Optional[int],
-    noise_initial_state: bool,
-    reward_is_neg_dist: bool,
-):
-    """Factory that returns a thunk creating one cube env instance."""
-
-    def thunk():
-        # Create ManipSpace cube env with task-mode configuration
-        env = make_cube_env(
-            env_id,
-            seed,
-            max_episode_steps,
-            task_id,
-            noise_initial_state=noise_initial_state,
-            reward_is_neg_dist=reward_is_neg_dist,
-        )
-        # Optional video recording for the first environment
-        if capture_video and idx == 0:
-            env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
-        # Episode statistics for logging
-        env = gym.wrappers.RecordEpisodeStatistics(env)
-        env.action_space.seed(seed)
-        return env
-
-    return thunk
-
-
 class Actor(nn.Module):
     def __init__(self, n_obs, n_act, env, exploration_noise=1, device=None, h_dim=256):
         super().__init__()
@@ -226,31 +192,12 @@ def _info_to_obs_14(
     ]).astype(np.float32)
 
 
-def _vector_infos_to_single(envs, infos):
-    """Convert vectorized infos from a SyncVectorEnv to a single-env info dict."""
-    # Handle list/tuple of dicts (Gym reset with multiple envs) and dict of batched arrays.
-    if isinstance(infos, (list, tuple)):
-        if len(infos) == envs.num_envs:
-            return infos[0]
-    if isinstance(infos, dict):
-        single = {}
-        for k, v in infos.items():
-            if isinstance(v, np.ndarray) and v.shape[0] == envs.num_envs:
-                single[k] = v[0]
-            else:
-                single[k] = v
-        return single
-    return infos
-
-
 # TODO: Modify to create options on every reset, to deal with the case that multiple tasks/goals are used
-def _create_cube_options(envs, reset_info):
+def _create_cube_options(env, reset_info):
     """Create the 9 cube manipulation options used for sparse rewards.
 
     Returns a dict mapping option name to option instance.
     """
-    # We assume a single environment in the vectorized wrapper.
-    env = envs.envs[0]
     base_env = env.unwrapped
 
     # Determine target block and target pose, mirroring HierarchicalDQNAgent.reset
@@ -410,38 +357,26 @@ if __name__ == "__main__":
 
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
 
-    # env setup
-    envs = gym.vector.SyncVectorEnv(
-        [
-            make_env(
-                args.env_id,
-                args.seed,
-                0,
-                args.capture_video,
-                run_name,
-                args.max_episode_steps,
-                args.task_id,
-                args.noise_initial_state,
-                args.reward_is_neg_dist,
-            )
-        ]
+    # env setup: single non-vectorized env created via make_cube_env (no extra wrappers)
+    env = make_cube_env(
+        args.env_id,
+        args.seed,
+        args.max_episode_steps,
+        args.task_id,
+        noise_initial_state=args.noise_initial_state,
+        reward_is_neg_dist=args.reward_is_neg_dist,
     )
-    # Use size-14 obs space (same structure as DQN high-level obs) via _info_to_obs_14
-    envs.single_observation_space = gym.spaces.Box(
-        low=-np.inf,
-        high=np.inf,
-        shape=(OBS_DIM,),
-        dtype=np.float32,
-    )
-    n_act = math.prod(envs.single_action_space.shape)
-    n_obs = OBS_DIM
-    action_low, action_high = float(envs.single_action_space.low[0]), float(envs.single_action_space.high[0])
-    assert isinstance(envs.single_action_space, gym.spaces.Box), "only continuous action space is supported"
-    logging.info(f"action space: {envs.single_action_space}")
-    logging.info(f"observation space (patched): {envs.single_observation_space}")
+    env.action_space.seed(args.seed)
 
-    actor = Actor(env=envs, n_obs=n_obs, n_act=n_act, device=device, exploration_noise=args.exploration_noise)
-    actor_detach = Actor(env=envs, n_obs=n_obs, n_act=n_act, device=device, exploration_noise=args.exploration_noise)
+    n_act = math.prod(env.action_space.shape)
+    n_obs = OBS_DIM
+    assert isinstance(env.action_space, gym.spaces.Box), "only continuous action space is supported"
+    action_low, action_high = float(env.action_space.low[0]), float(env.action_space.high[0])
+    logging.info(f"action space: {env.action_space}")
+    logging.info(f"observation space (logical): shape=({OBS_DIM},)")
+
+    actor = Actor(env=env, n_obs=n_obs, n_act=n_act, device=device, exploration_noise=args.exploration_noise)
+    actor_detach = Actor(env=env, n_obs=n_obs, n_act=n_act, device=device, exploration_noise=args.exploration_noise)
     # Copy params to actor_detach without grad
     from_module(actor).data.to_module(actor_detach)
     policy = actor_detach.explore
@@ -460,7 +395,7 @@ if __name__ == "__main__":
         return qnet_params, qnet_target_params, qnet
 
     def get_params_actor(actor):
-        target_actor = Actor(env=envs, device="meta", n_act=n_act, n_obs=n_obs)
+        target_actor = Actor(env=env, device="meta", n_act=n_act, n_obs=n_obs)
         actor_params = from_module(actor).data
         target_actor_params = actor_params.clone()
         target_actor_params.to_module(target_actor)
@@ -481,7 +416,6 @@ if __name__ == "__main__":
         list(actor.parameters()), lr=args.learning_rate, capturable=args.cudagraphs and not args.compile
     )
 
-    envs.single_observation_space.dtype = np.float32
     rb = ReplayBuffer(storage=LazyTensorStorage(args.buffer_size, device=device))
 
     def batched_qf(params, obs, action, next_q_value=None):
@@ -546,15 +480,14 @@ if __name__ == "__main__":
         policy = CudaGraphModule(policy)
 
     # TRY NOT TO MODIFY: start the game
-    obs, reset_infos = envs.reset(seed=args.seed)
-    single_env, reset_info = envs.envs[0], _vector_infos_to_single(envs, reset_infos)
-    target_block, target_pos, target_yaw = _get_target_from_info(single_env, reset_info)
+    obs_raw, reset_info = env.reset(seed=args.seed)
+    target_block, target_pos, target_yaw = _get_target_from_info(env, reset_info)
     obs = torch.as_tensor(
         _info_to_obs_14(reset_info, target_block, target_pos, target_yaw).reshape(1, -1),
         device=device,
         dtype=torch.float,
     )
-    cube_options = _create_cube_options(envs, reset_info)
+    cube_options = _create_cube_options(env, reset_info)
     if args.reward_option not in cube_options:
         raise ValueError(
             f"Unknown reward_option '{args.reward_option}'. "
@@ -565,7 +498,9 @@ if __name__ == "__main__":
     max_ep_ret = -float("inf")
     avg_returns = deque(maxlen=20)
     desc = ""
+    episode_return = 0.0
 
+    # Main training loop
     for global_step in pbar:
         if args.run_profiling:
             if global_step >= args.profiling_end:
@@ -579,6 +514,7 @@ if __name__ == "__main__":
                     "add_transition_to_rb": 0.0,
                     "update_td3_params": 0.0,
                     "log_to_wandb": 0.0,
+                    "reset_env": 0.0,
                 }
         if global_step == args.measure_burnin + args.learning_starts:
             start_time = time.time()
@@ -586,81 +522,50 @@ if __name__ == "__main__":
 
         # ALGO LOGIC: put action logic here
         if global_step < args.learning_starts:
-            actions = np.array([envs.single_action_space.sample() for _ in range(envs.num_envs)])
+            # Sample random exploratory action from env.action_space
+            action = env.action_space.sample()
         else:
-            actions = policy(obs=obs)
-            actions = actions.clamp(action_low, action_high).cpu().numpy()
+            # Policy outputs a batch of size 1; take the single action and clamp
+            action_tensor = policy(obs=obs).clamp(action_low, action_high)
+            action = action_tensor[0].cpu().numpy()
         _prof_checkpoint(args, global_step, "select_agent_action")
 
         # TRY NOT TO MODIFY: execute the game and log data.
-        next_obs, rewards, terminations, truncations, infos = envs.step(actions)
-        single_info = _vector_infos_to_single(envs, infos)
-        if (
-            (np.any(terminations) if isinstance(terminations, np.ndarray) else terminations) or
-            (np.any(truncations) if isinstance(truncations, np.ndarray) else truncations)
-        ):
-            target_block, target_pos, target_yaw = _get_target_from_info(single_env, single_info)
+        next_obs_raw, env_reward, terminated, truncated, info = env.step(action)
+        done = terminated or truncated
         next_obs = torch.as_tensor(
-            _info_to_obs_14(single_info, target_block, target_pos, target_yaw).reshape(1, -1),
+            _info_to_obs_14(info, target_block, target_pos, target_yaw).reshape(1, -1),
             device=device,
             dtype=torch.float,
         )
-        # logging.info(f"just stepped, infos.keys() = {list(infos.keys())}")
-        # if "final_info" in infos:
-        #     logging.info("final_info in infos")
-        # if "final_observation" in infos:
-        #     logging.info("final_observation in infos")
-
-        # Convert next_obs to 14-dim; handle episode boundary and final_obs for bootstrap
-        final_obs_14 = None
-        if "final_observation" in infos and (np.any(truncations) if isinstance(truncations, np.ndarray) else truncations):
-            final_info = infos["final_info"]
-            idx = 0  # single env
-            fb, fp, fy = _get_target_from_info(single_env, final_info[idx])
-            final_obs_14 = torch.as_tensor(
-                _info_to_obs_14(final_info[idx], fb, fp, fy),
-                device=device,
-                dtype=torch.float,
-            ).unsqueeze(0)
-
         _prof_checkpoint(args, global_step, "step_env")
         # logging.info(f"global_step = {global_step}")
-        # logging.info(f"actions = {actions}")
+        # logging.info(f"action = {action}")
+        # logging.info(f"next_obs_raw = {next_obs_raw}")
         # logging.info(f"next_obs = {next_obs}")
-        # logging.info(f"rewards = {rewards}")
-        # logging.info(f"terminations = {terminations}")
-        # logging.info(f"truncations = {truncations}")
-        # logging.info(f"infos = {infos}")
+        # logging.info(f"terminated = {terminated}")
+        # logging.info(f"truncated = {truncated}")
+        # logging.info(f"info = {info}")
         # logging.info("")
 
         # Replace environment rewards with sparse option-based reward from selected option
         single_next_obs = next_obs[0]
-        reward_value = float(cube_options[args.reward_option].calculate_reward(single_next_obs, single_info))
-        rewards = [reward_value]
+        reward_value = float(cube_options[args.reward_option].calculate_reward(single_next_obs, info))
+        rewards = torch.as_tensor([[reward_value]], device=device, dtype=torch.float)
+        episode_return += reward_value
         _prof_checkpoint(args, global_step, "compute_option_reward")
-        # logging.info(f"reward_value from option {args.reward_option} = {reward_value}")
+        # logging.info(f"env_reward = {env_reward}")
+        # logging.info(f"reward_value = {reward_value}")
+        # logging.info(f"rewards = {rewards}")
 
-        # TRY NOT TO MODIFY: record rewards for plotting purposes
-        # TODO: Modify to ensure correct handling of end of episode
-        if "final_info" in infos:
-            for info in infos["final_info"]:
-                r = float(info["episode"]["r"].reshape(()))
-                max_ep_ret = max(max_ep_ret, r)
-                avg_returns.append(r)
-            desc = (
-                f"global_step={global_step}, episodic_return={torch.tensor(avg_returns).mean(): 4.2f} (max={max_ep_ret: 4.2f})"
-            )
-
-        # TRY NOT TO MODIFY: save data to replay buffer; handle `final_observation`
-        real_next_obs = next_obs.clone()
-        if final_obs_14 is not None:
-            real_next_obs[truncations] = final_obs_14
-        # obs = torch.as_tensor(obs, device=device, dtype=torch.float)
+        # TRY NOT TO MODIFY: save data to replay buffer
+        actions_tensor = torch.as_tensor(action, device=device, dtype=torch.float).unsqueeze(0)
+        terminations = torch.as_tensor([terminated], device=device, dtype=torch.bool)
         transition = TensorDict(
             observations=obs,
-            next_observations=real_next_obs,
-            actions=torch.as_tensor(actions, device=device, dtype=torch.float),
-            rewards=torch.as_tensor(rewards, device=device, dtype=torch.float),
+            next_observations=next_obs,
+            actions=actions_tensor,
+            rewards=rewards,
             terminations=terminations,
             dones=terminations,
             batch_size=obs.shape[0],
@@ -702,6 +607,27 @@ if __name__ == "__main__":
                 )
             _prof_checkpoint(args, global_step, "log_to_wandb")
 
+        # Handle end of episode
+        if done:
+            # Handle episode-level logging
+            max_ep_ret = max(max_ep_ret, episode_return)
+            avg_returns.append(episode_return)
+            desc = (
+                f"global_step={global_step}, episodic_return={torch.tensor(avg_returns).mean(): 4.2f} (max={max_ep_ret: 4.2f})"
+            )
+
+            # Reset environment
+            obs_raw, reset_info = env.reset()
+            target_block, target_pos, target_yaw = _get_target_from_info(env, reset_info)
+            obs = torch.as_tensor(
+                _info_to_obs_14(reset_info, target_block, target_pos, target_yaw).reshape(1, -1),
+                device=device,
+                dtype=torch.float,
+            )
+            cube_options = _create_cube_options(env, reset_info)
+            episode_return = 0.0
+            _prof_checkpoint(args, global_step, "reset_env")
+
     # Profiling output
     if args.run_profiling:
         save_path = os.path.join(".ogbench", "td3_profiling", run_name)
@@ -713,4 +639,4 @@ if __name__ == "__main__":
             args.profiling_dict, save_path, args.profiling_start, args.profiling_end, "TD3"
         )
 
-    envs.close()
+    env.close()
