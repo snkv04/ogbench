@@ -85,8 +85,7 @@ def make_maze_env(loco_env_type, maze_env_type, *args, **kwargs):
             # Define constants.
             self._offset_x = 4
             self._offset_y = 4
-            _ant_torso_radius = 0.25  # sphere radius from ant.xml torso_geom
-            self._noise = self._maze_unit / 2 - _ant_torso_radius  # max displacement in meters before hitting a wall
+            self._noise = 1.0
             self._goal_tol = 1.0 if loco_env_type == 'point' else 0.5
 
             # Define maze map.
@@ -577,8 +576,8 @@ def make_maze_env(loco_env_type, maze_env_type, *args, **kwargs):
             return x, y
 
         def add_noise(self, xy):
-            random_x = np.random.uniform(low=-self._noise, high=self._noise)
-            random_y = np.random.uniform(low=-self._noise, high=self._noise)
+            random_x = np.random.uniform(low=-self._noise, high=self._noise) * self._maze_unit / 4
+            random_y = np.random.uniform(low=-self._noise, high=self._noise) * self._maze_unit / 4
             return xy[0] + random_x, xy[1] + random_y
 
     class BallEnv(MazeEnv):
