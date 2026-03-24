@@ -91,6 +91,8 @@ class Args:
     """number of episodes to run validation for"""
     num_episode_videos: int = 2
     """number of episode videos to save"""
+    save_every_k_training_episodes: int = 50
+    """save a training video every k episodes (0 to disable)"""
 
     fixed_init_ij: bool = False
     """if True, always start from init_ij=(3,2) with no init noise; if False, randomly sample from free cells"""
@@ -397,6 +399,8 @@ if __name__ == "__main__":
     avg_returns = deque(maxlen=20)
     desc = ""
     episode_return = 0.0
+    save_this_ep = False
+    episode_frames = []
 
     # Main training loop
     for global_step in pbar:
@@ -430,6 +434,9 @@ if __name__ == "__main__":
         done = terminated or truncated
         next_obs = torch.as_tensor(next_obs_raw.reshape(1, -1), device=device, dtype=torch.float)
         _prof_checkpoint(args, global_step, "step_env")
+
+        if save_this_ep:
+            episode_frames.append(env.render())
 
         rewards = torch.as_tensor([[env_reward]], device=device, dtype=torch.float)
         episode_return += float(env_reward)
@@ -490,11 +497,30 @@ if __name__ == "__main__":
                 f"global_step={global_step}, episodic_return={torch.tensor(avg_returns).mean(): 4.2f} (max={max_ep_ret: 4.2f})"
             )
 
+            if save_this_ep:
+                assert episode_frames, "Episode frames should not be empty"
+                save_episode_video(
+                    episode_frames,
+                    save_dir=os.path.join(".ogbench", "td3_runs", run_name, "training_videos"),
+                    filename=f"training_step{global_step}_ep{episode_idx}",
+                    fps=30,
+                )
+
             obs_raw, _ = env.reset()
             episode_idx += 1
             _log_reset(env, episode_idx, reset_frame_dir)
             obs = torch.as_tensor(obs_raw.reshape(1, -1), device=device, dtype=torch.float)
             episode_return = 0.0
+
+            save_this_ep = (
+                args.save_every_k_training_episodes > 0
+                and episode_idx % args.save_every_k_training_episodes == 0
+            )
+            if save_this_ep:
+                episode_frames = [env.render()]
+            else:
+                episode_frames = []
+
             _prof_checkpoint(args, global_step, "reset_env")
 
         # Optional validation at fixed step intervals
