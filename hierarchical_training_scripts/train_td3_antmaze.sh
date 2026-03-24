@@ -13,11 +13,6 @@ export MUJOCO_GL=osmesa  # To enable headless rendering
 
 # Run the training script
 cd /home/svangaru/Desktop/ogbench/
-python -m hierarchical_training_scripts.train_cube_lowlevel_td3 \
+python -m hierarchical_training_scripts.train_antmaze_lowlevel_td3 \
     --compile \
-    --cudagraphs \
-    --task-id=1 \
-    --validation-freq=100000 \
-    --num-validation-episodes=10 \
-    --num-episode-videos=2 \
-    --reward-type=sparse_stepwise
+    --cudagraphs

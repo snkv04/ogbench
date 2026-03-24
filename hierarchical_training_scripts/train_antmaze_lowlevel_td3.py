@@ -2,6 +2,7 @@ import os
 
 os.environ["TORCHDYNAMO_INLINE_INBUILT_NN_MODULES"] = "1"
 
+from datetime import datetime
 import math
 import random
 import time
@@ -88,7 +89,7 @@ class Args:
     """how often (in env steps) to run validation"""
     num_validation_episodes: int = 10
     """number of episodes to run validation for"""
-    num_episode_videos: int = 5
+    num_episode_videos: int = 2
     """number of episode videos to save"""
 
     fixed_init_ij: bool = False
@@ -133,7 +134,7 @@ class RandomInitGoalEnv(gym.Wrapper):
         task_info = dict(
             init_ij=init_ij,
             # init_xy=unwrapped.ij_to_xy(init_ij),
-            goal_xy_offset=(0, 1),
+            goal_xy_offset=(0, 0.25),
         )
         options = options or {}
         options["task_info"] = task_info
@@ -249,7 +250,8 @@ def _log_reset(env, episode_idx: int, save_dir: str) -> None:
 
 if __name__ == "__main__":
     args = tyro.cli(Args)
-    run_name = f"antmaze-{args.maze_type}__{args.exp_name}__{args.seed}__{args.compile}__{args.cudagraphs}"
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    run_name = f"antmaze-{args.maze_type}__{args.exp_name}__{args.seed}__{args.compile}__{args.cudagraphs}__{timestamp}"
 
     wandb.init(
         project="td3_antmaze",

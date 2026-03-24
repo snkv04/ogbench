@@ -3,6 +3,7 @@ import os
 
 os.environ["TORCHDYNAMO_INLINE_INBUILT_NN_MODULES"] = "1"
 
+from datetime import datetime
 import math
 import os
 import random
@@ -400,7 +401,8 @@ def _create_cube_options(env, reset_info, args):
 
 if __name__ == "__main__":
     args = tyro.cli(Args)
-    run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{args.compile}__{args.cudagraphs}"
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{args.compile}__{args.cudagraphs}__{timestamp}"
 
     wandb.init(
         project="td3_continuous_action",
