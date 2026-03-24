@@ -96,6 +96,8 @@ class Args:
 
     fixed_init_ij: bool = False
     """if True, always start from init_ij=(3,2) with no init noise; if False, randomly sample from free cells"""
+    avoid_walls: bool = False
+    """if True, only sample init cells where the cell above, (i+1, j), is also free"""
 
     # Profiling
     run_profiling: bool = False
@@ -110,11 +112,15 @@ class RandomInitGoalEnv(gym.Wrapper):
     observation space from (29,) to (31,).
     """
 
-    def __init__(self, env, fixed_init_ij: bool = False):
+    def __init__(self, env, fixed_init_ij: bool = False, avoid_walls: bool = False):
         super().__init__(env)
         maze_map = env.unwrapped.maze_map
         rows, cols = np.where(maze_map == 0)
-        self._free_cells = list(zip(rows.tolist(), cols.tolist()))
+        all_free = set(zip(rows.tolist(), cols.tolist()))
+        self._free_cells = [
+            (i, j) for (i, j) in all_free
+            if not avoid_walls or (i + 1, j) in all_free
+        ]
         self._fixed_init_ij = fixed_init_ij
         logging.info(f"self._free_cells = {self._free_cells}")
         self._episode_init_xy = np.zeros(2, dtype=np.float64)
@@ -272,7 +278,7 @@ if __name__ == "__main__":
 
     # Env setup: MazeEnv wrapped to randomly sample init/goal on each reset.
     base_env = make_maze_env("ant", "maze", maze_type=args.maze_type, terminate_at_goal=False, add_noise_to_init=not args.fixed_init_ij, add_noise_to_goal=False)
-    env = RandomInitGoalEnv(base_env, fixed_init_ij=args.fixed_init_ij)
+    env = RandomInitGoalEnv(base_env, fixed_init_ij=args.fixed_init_ij, avoid_walls=args.avoid_walls)
     env = gym.wrappers.TimeLimit(env, max_episode_steps=args.max_episode_steps)
     env.action_space.seed(args.seed)
 
