@@ -102,6 +102,10 @@ class Args:
     """if True, only sample init cells where the cell above, (i+1, j), is also free"""
     concatenate_only_xy: bool = True
     """if True, prepend only init xy (obs size +2); if False, prepend full init obs (obs size *2)"""
+    goal_x_offset: float = 0.0
+    """x offset applied to the goal position relative to init"""
+    goal_y_offset: float = 0.25
+    """y offset applied to the goal position relative to init"""
 
     # Profiling
     run_profiling: bool = False
@@ -123,7 +127,7 @@ class RandomInitGoalEnv(gym.Wrapper):
     expanding the observation space from (29,) to (31,) or (58,) respectively.
     """
 
-    def __init__(self, env, fixed_init_ij: bool = False, avoid_walls: bool = False, concatenate_only_xy: bool = True):
+    def __init__(self, env, goal_x_offset: float, goal_y_offset: float, fixed_init_ij: bool = False, avoid_walls: bool = False, concatenate_only_xy: bool = True):
         super().__init__(env)
         maze_map = env.unwrapped.maze_map
         rows, cols = np.where(maze_map == 0)
@@ -134,6 +138,7 @@ class RandomInitGoalEnv(gym.Wrapper):
         ]
         self._fixed_init_ij = fixed_init_ij
         self._concatenate_only_xy = concatenate_only_xy
+        self._goal_xy_offset = (goal_x_offset, goal_y_offset)
         logging.info(f"self._free_cells = {self._free_cells}")
 
         base_shape = env.observation_space.shape  # (29,)
@@ -155,7 +160,7 @@ class RandomInitGoalEnv(gym.Wrapper):
         task_info = dict(
             init_ij=init_ij,
             # init_xy=unwrapped.ij_to_xy(init_ij),
-            goal_xy_offset=(0, 0.25),
+            goal_xy_offset=self._goal_xy_offset,
         )
         options = options or {}
         options["task_info"] = task_info
@@ -315,6 +320,8 @@ if __name__ == "__main__":
     base_env = make_maze_env("ant", "maze", maze_type=args.maze_type, terminate_at_goal=False, add_noise_to_init=not args.fixed_init_ij, add_noise_to_goal=False)
     env = RandomInitGoalEnv(
         base_env,
+        goal_x_offset=args.goal_x_offset,
+        goal_y_offset=args.goal_y_offset,
         fixed_init_ij=args.fixed_init_ij,
         avoid_walls=args.avoid_walls,
         concatenate_only_xy=args.concatenate_only_xy
