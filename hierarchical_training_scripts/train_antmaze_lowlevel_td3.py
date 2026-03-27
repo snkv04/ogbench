@@ -109,6 +109,13 @@ class Args:
     profiling_end: int = 1_000_000
 
 
+def _is_goal_xy_reachable(maze_env, goal_xy) -> bool:
+    """Return True if goal_xy maps to a free (non-wall) cell in the maze grid."""
+    i, j = maze_env.xy_to_ij(goal_xy)
+    maze_map = maze_env.maze_map
+    return 0 <= i < maze_map.shape[0] and 0 <= j < maze_map.shape[1] and maze_map[i, j] == 0
+
+
 class RandomInitGoalEnv(gym.Wrapper):
     """Wrapper that randomly samples init and goal positions from free maze cells on each reset.
 
@@ -201,10 +208,18 @@ def run_maze_validation_episodes(
     tasks_completed_at_end = 0.0
     tasks_completed_at_all = 0.0
     episode_returns = []
+    filtered_tasks_completed_at_end = 0.0
+    filtered_tasks_completed_at_all = 0.0
+    filtered_episode_returns = []
+    filtered_episode_count = 0
 
     for ep_idx in tqdm.tqdm(range(num_episodes), desc="Running validation episodes"):
         ob, info = env.reset()
         agent.reset(ob, info)
+
+        goal_reachable = _is_goal_xy_reachable(env.unwrapped, env.unwrapped.cur_goal_xy)
+        if goal_reachable:
+            filtered_episode_count += 1
 
         episode_had_success = False
         episode_return = 0.0
@@ -223,15 +238,21 @@ def run_maze_validation_episodes(
             success = info.get("success", 0.0) == 1.0
             if success and not episode_had_success:
                 tasks_completed_at_all += 1
+                if goal_reachable:
+                    filtered_tasks_completed_at_all += 1
                 episode_had_success = True
             if done and success:
                 tasks_completed_at_end += 1
+                if goal_reachable:
+                    filtered_tasks_completed_at_end += 1
 
             if save_this_ep:
                 episode_frames.append(env.render())
 
         logging.info(f"Episode {ep_idx} terminated after {step} steps")
         episode_returns.append(episode_return)
+        if goal_reachable:
+            filtered_episode_returns.append(episode_return)
 
         if save_this_ep and save_dir is not None and episode_frames:
             save_episode_video(
@@ -242,11 +263,16 @@ def run_maze_validation_episodes(
             )
 
     n = num_episodes if num_episodes > 0 else 1
+    fn = filtered_episode_count if filtered_episode_count > 0 else 1
     return {
         "success_rate": tasks_completed_at_end / n,
         "completion_rate": tasks_completed_at_all / n,
         "avg_episode_return": float(np.mean(episode_returns)) if episode_returns else 0.0,
         "num_episodes": num_episodes,
+        "filtered_success_rate": filtered_tasks_completed_at_end / fn,
+        "filtered_completion_rate": filtered_tasks_completed_at_all / fn,
+        "filtered_avg_episode_return": float(np.mean(filtered_episode_returns)) if filtered_episode_returns else 0.0,
+        "num_filtered_episodes": filtered_episode_count,
     }
 
 
@@ -419,9 +445,13 @@ if __name__ == "__main__":
     avg_returns = deque(maxlen=args.episode_window_len)
     train_tasks_completed_at_end = deque(maxlen=args.episode_window_len)
     train_tasks_completed_at_all = deque(maxlen=args.episode_window_len)
+    train_filtered_avg_returns = deque(maxlen=args.episode_window_len)
+    train_filtered_tasks_completed_at_end = deque(maxlen=args.episode_window_len)
+    train_filtered_tasks_completed_at_all = deque(maxlen=args.episode_window_len)
     desc = ""
     episode_return = 0.0
     episode_had_success = False
+    episode_goal_reachable = _is_goal_xy_reachable(env.unwrapped, env.unwrapped.cur_goal_xy)
     save_this_ep = False
     episode_frames = []
 
@@ -505,6 +535,9 @@ if __name__ == "__main__":
                         "episode_return": float(np.mean(avg_returns)) if avg_returns else 0.0,
                         "success_rate": float(np.mean(train_tasks_completed_at_end)) if train_tasks_completed_at_end else 0.0,
                         "completion_rate": float(np.mean(train_tasks_completed_at_all)) if train_tasks_completed_at_all else 0.0,
+                        "filtered_episode_return": float(np.mean(train_filtered_avg_returns)) if train_filtered_avg_returns else 0.0,
+                        "filtered_success_rate": float(np.mean(train_filtered_tasks_completed_at_end)) if train_filtered_tasks_completed_at_end else 0.0,
+                        "filtered_completion_rate": float(np.mean(train_filtered_tasks_completed_at_all)) if train_filtered_tasks_completed_at_all else 0.0,
                         "actor_loss": out_main["actor_loss"].mean(),
                         "qf_loss": out_main["qf_loss"].mean(),
                     }
@@ -523,6 +556,10 @@ if __name__ == "__main__":
             avg_returns.append(episode_return)
             train_tasks_completed_at_end.append(float(success))
             train_tasks_completed_at_all.append(float(episode_had_success))
+            if episode_goal_reachable:
+                train_filtered_tasks_completed_at_end.append(float(success))
+                train_filtered_tasks_completed_at_all.append(float(episode_had_success))
+                train_filtered_avg_returns.append(episode_return)
             desc = (
                 f"global_step={global_step}, episodic_return={torch.tensor(avg_returns).mean(): 4.2f} (max={max_ep_ret: 4.2f})"
             )
@@ -543,6 +580,8 @@ if __name__ == "__main__":
             obs = torch.as_tensor(obs_raw.reshape(1, -1), device=device, dtype=torch.float)
             episode_return = 0.0
             episode_had_success = False
+            episode_goal_reachable = _is_goal_xy_reachable(env.unwrapped, env.unwrapped.cur_goal_xy)
+            logging.info(f"Is goal {env.unwrapped.cur_goal_xy} reachable? {episode_goal_reachable}")
 
             save_this_ep = (
                 args.save_every_k_training_episodes > 0
@@ -579,12 +618,20 @@ if __name__ == "__main__":
             logging.info(f"    success_rate={val_metrics['success_rate']:.2%}")
             logging.info(f"    completion_rate={val_metrics['completion_rate']:.2%}")
             logging.info(f"    avg_episode_return={val_metrics['avg_episode_return']:.2f}")
+            logging.info(f"    filtered_success_rate={val_metrics['filtered_success_rate']:.2%}  (n={val_metrics['num_filtered_episodes']})")
+            logging.info(f"    filtered_completion_rate={val_metrics['filtered_completion_rate']:.2%}")
+            logging.info(f"    filtered_avg_episode_return={val_metrics['filtered_avg_episode_return']:.2f}")
 
             wandb.log(
                 {
                     "val/success_rate": float(val_metrics["success_rate"]),
                     "val/completion_rate": float(val_metrics["completion_rate"]),
                     "val/avg_episode_return": float(val_metrics["avg_episode_return"]),
+                    "val/num_episodes": float(val_metrics["num_episodes"]),
+                    "val/filtered_success_rate": float(val_metrics["filtered_success_rate"]),
+                    "val/filtered_completion_rate": float(val_metrics["filtered_completion_rate"]),
+                    "val/filtered_avg_episode_return": float(val_metrics["filtered_avg_episode_return"]),
+                    "val/num_filtered_episodes": float(val_metrics["num_filtered_episodes"]),
                 },
                 step=global_step,
             )
