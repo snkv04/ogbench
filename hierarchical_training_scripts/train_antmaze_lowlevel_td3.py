@@ -98,6 +98,8 @@ class Args:
     """if True, always start from init_ij=(3,2) with no init noise; if False, randomly sample from free cells"""
     avoid_walls: bool = False
     """if True, only sample init cells where the cell above, (i+1, j), is also free"""
+    concatenate_only_xy: bool = True
+    """if True, prepend only init xy (obs size +2); if False, prepend full init obs (obs size *2)"""
 
     # Profiling
     run_profiling: bool = False
@@ -108,11 +110,11 @@ class Args:
 class RandomInitGoalEnv(gym.Wrapper):
     """Wrapper that randomly samples init and goal positions from free maze cells on each reset.
 
-    Prepends the true (post-noise) init xy to every observation, expanding the
-    observation space from (29,) to (31,).
+    Prepends the true (post-noise) init xy (or full init obs) to every observation,
+    expanding the observation space from (29,) to (31,) or (58,) respectively.
     """
 
-    def __init__(self, env, fixed_init_ij: bool = False, avoid_walls: bool = False):
+    def __init__(self, env, fixed_init_ij: bool = False, avoid_walls: bool = False, concatenate_only_xy: bool = True):
         super().__init__(env)
         maze_map = env.unwrapped.maze_map
         rows, cols = np.where(maze_map == 0)
@@ -122,19 +124,21 @@ class RandomInitGoalEnv(gym.Wrapper):
             if not avoid_walls or (i + 1, j) in all_free
         ]
         self._fixed_init_ij = fixed_init_ij
+        self._concatenate_only_xy = concatenate_only_xy
         logging.info(f"self._free_cells = {self._free_cells}")
-        self._episode_init_xy = np.zeros(2, dtype=np.float64)
 
         base_shape = env.observation_space.shape  # (29,)
+        prefix_size = 2 if concatenate_only_xy else base_shape[0]
+        self._episode_init_prefix = np.zeros(prefix_size, dtype=np.float64)
         self.observation_space = gym.spaces.Box(
             low=-np.inf,
             high=np.inf,
-            shape=(base_shape[0] + 2,),
+            shape=(base_shape[0] + prefix_size,),
             dtype=env.observation_space.dtype,
         )
 
     def _augment_obs(self, obs):
-        return np.concatenate([self._episode_init_xy, obs])
+        return np.concatenate([self._episode_init_prefix, obs])
 
     def reset(self, *, seed=None, options=None, **kwargs):
         unwrapped = self.unwrapped
@@ -148,7 +152,10 @@ class RandomInitGoalEnv(gym.Wrapper):
         options["task_info"] = task_info
         obs, info = self.env.reset(seed=seed, options=options, **kwargs)
         # Record true (post-noise) init xy — set_xy has already been called inside MazeEnv.reset()
-        self._episode_init_xy = unwrapped.get_xy().astype(np.float64)
+        if self._concatenate_only_xy:
+            self._episode_init_prefix = unwrapped.get_xy().astype(np.float64)
+        else:
+            self._episode_init_prefix = obs.astype(np.float64)
         return self._augment_obs(obs), info
 
     def step(self, action):
@@ -278,7 +285,12 @@ if __name__ == "__main__":
 
     # Env setup: MazeEnv wrapped to randomly sample init/goal on each reset.
     base_env = make_maze_env("ant", "maze", maze_type=args.maze_type, terminate_at_goal=False, add_noise_to_init=not args.fixed_init_ij, add_noise_to_goal=False)
-    env = RandomInitGoalEnv(base_env, fixed_init_ij=args.fixed_init_ij, avoid_walls=args.avoid_walls)
+    env = RandomInitGoalEnv(
+        base_env,
+        fixed_init_ij=args.fixed_init_ij,
+        avoid_walls=args.avoid_walls,
+        concatenate_only_xy=args.concatenate_only_xy
+    )
     env = gym.wrappers.TimeLimit(env, max_episode_steps=args.max_episode_steps)
     env.action_space.seed(args.seed)
 
@@ -505,6 +517,7 @@ if __name__ == "__main__":
 
             if save_this_ep:
                 assert episode_frames, "Episode frames should not be empty"
+                logging.info(f"Episode {episode_idx} is saving {len(episode_frames)} frames")
                 save_episode_video(
                     episode_frames,
                     save_dir=os.path.join(".ogbench", "td3_runs", run_name, "training_videos"),
