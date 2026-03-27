@@ -93,6 +93,8 @@ class Args:
     """number of episode videos to save"""
     save_every_k_training_episodes: int = 50
     """save a training video every k episodes (0 to disable)"""
+    episode_window_len: int = 20
+    """number of recent episodes to average over for training metrics"""
 
     fixed_init_ij: bool = False
     """if True, always start from init_ij=(3,2) with no init noise; if False, randomly sample from free cells"""
@@ -414,9 +416,12 @@ if __name__ == "__main__":
     pbar = tqdm.tqdm(range(args.total_timesteps))
     start_time = None
     max_ep_ret = -float("inf")
-    avg_returns = deque(maxlen=20)
+    avg_returns = deque(maxlen=args.episode_window_len)
+    train_tasks_completed_at_end = deque(maxlen=args.episode_window_len)
+    train_tasks_completed_at_all = deque(maxlen=args.episode_window_len)
     desc = ""
     episode_return = 0.0
+    episode_had_success = False
     save_this_ep = False
     episode_frames = []
 
@@ -458,6 +463,9 @@ if __name__ == "__main__":
 
         rewards = torch.as_tensor([[env_reward]], device=device, dtype=torch.float)
         episode_return += float(env_reward)
+        success = info.get("success", 0.0) == 1.0
+        if success and not episode_had_success:
+            episode_had_success = True
 
         # TRY NOT TO MODIFY: save data to replay buffer
         actions_tensor = torch.as_tensor(action, device=device, dtype=torch.float).unsqueeze(0)
@@ -494,7 +502,9 @@ if __name__ == "__main__":
                 pbar.set_description(f"{speed: 4.4f} sps, " + desc)
                 with torch.no_grad():
                     logs = {
-                        "episode_return": torch.tensor(avg_returns).mean(),
+                        "episode_return": float(np.mean(avg_returns)) if avg_returns else 0.0,
+                        "success_rate": float(np.mean(train_tasks_completed_at_end)) if train_tasks_completed_at_end else 0.0,
+                        "completion_rate": float(np.mean(train_tasks_completed_at_all)) if train_tasks_completed_at_all else 0.0,
                         "actor_loss": out_main["actor_loss"].mean(),
                         "qf_loss": out_main["qf_loss"].mean(),
                     }
@@ -511,6 +521,8 @@ if __name__ == "__main__":
         if done:
             max_ep_ret = max(max_ep_ret, episode_return)
             avg_returns.append(episode_return)
+            train_tasks_completed_at_end.append(float(success))
+            train_tasks_completed_at_all.append(float(episode_had_success))
             desc = (
                 f"global_step={global_step}, episodic_return={torch.tensor(avg_returns).mean(): 4.2f} (max={max_ep_ret: 4.2f})"
             )
@@ -530,6 +542,7 @@ if __name__ == "__main__":
             _log_reset(env, episode_idx, reset_frame_dir)
             obs = torch.as_tensor(obs_raw.reshape(1, -1), device=device, dtype=torch.float)
             episode_return = 0.0
+            episode_had_success = False
 
             save_this_ep = (
                 args.save_every_k_training_episodes > 0
