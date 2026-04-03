@@ -141,9 +141,10 @@ class Actor(nn.Module):
         obs = self.fc_mu(obs).tanh()
         return obs * self.action_scale + self.action_bias
 
-    def explore(self, obs):
+    def explore(self, obs, exploration_noise=None):
         act = self(obs)
-        return act + torch.randn_like(act).mul(self.action_scale * self.exploration_noise)
+        noise = self.exploration_noise if exploration_noise is None else exploration_noise
+        return act + torch.randn_like(act).mul(self.action_scale * noise)
 
 
 # ALGO LOGIC: initialize agent here:

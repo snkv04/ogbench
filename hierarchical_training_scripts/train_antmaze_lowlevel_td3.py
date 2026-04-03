@@ -67,8 +67,10 @@ class Args:
     """the batch size of sample from the replay memory"""
     policy_noise: float = 0.2
     """the scale of policy noise"""
-    exploration_noise: float = 0.1
-    """the scale of exploration noise"""
+    start_exploration_noise: float = 1.0
+    """the scale of exploration noise at learning_starts"""
+    end_exploration_noise: float = 1.0
+    """the scale of exploration noise at total_timesteps / 2 (held constant thereafter)"""
     learning_starts: int = 25_000
     """timestep to start learning"""
     policy_frequency: int = 2
@@ -296,10 +298,22 @@ def _log_reset(env, episode_idx: int, save_dir: str) -> None:
     Image.fromarray(frame).save(os.path.join(save_dir, f"reset_ep{episode_idx:06d}.png"))
 
 
+def _compute_exploration_noise(
+    global_step: int,
+    learning_starts: int,
+    total_timesteps: int,
+    start_noise: float,
+    end_noise: float
+) -> float:
+    anneal_frac = min(1.0, (global_step - learning_starts) / (total_timesteps / 2 - learning_starts))
+    return start_noise + anneal_frac * (end_noise - start_noise)
+
+
 if __name__ == "__main__":
     args = tyro.cli(Args)
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     run_name = f"antmaze-{args.maze_type}__{args.exp_name}__{args.seed}__{args.compile}__{args.cudagraphs}__{timestamp}"
+    logging.info(f"run_name = {run_name}")
 
     wandb.init(
         project="td3_antmaze",
@@ -336,8 +350,8 @@ if __name__ == "__main__":
     logging.info(f"action space: {env.action_space}")
     logging.info(f"observation space: {env.observation_space}")
 
-    actor = Actor(env=env, n_obs=n_obs, n_act=n_act, device=device, exploration_noise=args.exploration_noise)
-    actor_detach = Actor(env=env, n_obs=n_obs, n_act=n_act, device=device, exploration_noise=args.exploration_noise)
+    actor = Actor(env=env, n_obs=n_obs, n_act=n_act, device=device, exploration_noise=args.start_exploration_noise)
+    actor_detach = Actor(env=env, n_obs=n_obs, n_act=n_act, device=device, exploration_noise=args.start_exploration_noise)
     from_module(actor).data.to_module(actor_detach)
     policy = actor_detach.explore
 
@@ -485,7 +499,18 @@ if __name__ == "__main__":
         if global_step < args.learning_starts:
             action = env.action_space.sample()
         else:
-            action_tensor = policy(obs=obs).clamp(action_low, action_high)
+            current_exploration_noise = torch.tensor(
+                _compute_exploration_noise(
+                    global_step,
+                    args.learning_starts,
+                    args.total_timesteps,
+                    args.start_exploration_noise,
+                    args.end_exploration_noise
+                ),
+                device=device, dtype=torch.float
+            )
+            logging.info(f"At global step {global_step}, current exploration noise = {current_exploration_noise}")
+            action_tensor = policy(obs=obs, exploration_noise=current_exploration_noise).clamp(action_low, action_high)
             action = action_tensor[0].cpu().numpy()
         _prof_checkpoint(args, global_step, "select_agent_action")
 
