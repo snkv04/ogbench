@@ -67,9 +67,9 @@ class Args:
     """the batch size of sample from the replay memory"""
     policy_noise: float = 0.2
     """the scale of policy noise"""
-    start_exploration_noise: float = 1.0
+    start_exploration_noise: float = 0.8
     """the scale of exploration noise at learning_starts"""
-    end_exploration_noise: float = 1.0
+    end_exploration_noise: float = 0.8
     """the scale of exploration noise at total_timesteps / 2 (held constant thereafter)"""
     learning_starts: int = 25_000
     """timestep to start learning"""
@@ -296,6 +296,30 @@ def _log_reset(env, episode_idx: int, save_dir: str) -> None:
     frame = env.render()
     os.makedirs(save_dir, exist_ok=True)
     Image.fromarray(frame).save(os.path.join(save_dir, f"reset_ep{episode_idx:06d}.png"))
+
+
+def save_td3_checkpoint(
+    global_step: int,
+    actor,
+    target_actor_params,
+    qnet_params,
+    qnet_target_params,
+    actor_optimizer,
+    q_optimizer,
+    save_path: str,
+) -> None:
+    checkpoint = {
+        "global_step": global_step,
+        "actor_state_dict": actor.state_dict(),
+        "target_actor_params": target_actor_params,
+        "qnet_params": qnet_params,
+        "qnet_target_params": qnet_target_params,
+        "actor_optimizer_state_dict": actor_optimizer.state_dict(),
+        "q_optimizer_state_dict": q_optimizer.state_dict(),
+    }
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    torch.save(checkpoint, save_path)
+    logging.info(f"Checkpoint saved to: {save_path}")
 
 
 def _compute_exploration_noise(
@@ -666,6 +690,18 @@ if __name__ == "__main__":
                     "val/num_filtered_episodes": float(val_metrics["num_filtered_episodes"]),
                 },
                 step=global_step,
+            )
+
+            checkpoint_path = os.path.join(".ogbench", "td3_runs", run_name, "checkpoints", f"checkpoint_step{global_step}.pt")
+            save_td3_checkpoint(
+                global_step=global_step,
+                actor=actor,
+                target_actor_params=target_actor_params,
+                qnet_params=qnet_params,
+                qnet_target_params=qnet_target_params,
+                actor_optimizer=actor_optimizer,
+                q_optimizer=q_optimizer,
+                save_path=checkpoint_path,
             )
 
     # Profiling output
