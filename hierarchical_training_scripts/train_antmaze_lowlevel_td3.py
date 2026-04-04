@@ -104,10 +104,10 @@ class Args:
     """if True, only sample init cells where the cell above, (i+1, j), is also free"""
     concatenate_only_xy: bool = True
     """if True, prepend only init xy (obs size +2); if False, prepend full init obs (obs size *2)"""
-    goal_x_offset: float = 0.0
-    """x offset applied to the goal position relative to init"""
-    goal_y_offset: float = 0.25
-    """y offset applied to the goal position relative to init"""
+    goal_offset_dir: str = "up"
+    """direction of goal offset relative to init: one of 'up', 'down', 'left', 'right'"""
+    goal_offset_dist: float = 1.0
+    """distance of goal offset relative to init, in maze unit blocks"""
 
     # Profiling
     run_profiling: bool = False
@@ -355,11 +355,18 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
 
     # Env setup: MazeEnv wrapped to randomly sample init/goal on each reset.
+    _dir_to_offset = {"up": (0.0, 1.0), "down": (0.0, -1.0), "right": (1.0, 0.0), "left": (-1.0, 0.0)}
+    if args.goal_offset_dir not in _dir_to_offset:
+        raise ValueError(f"goal_offset_dir must be one of {list(_dir_to_offset)}, got '{args.goal_offset_dir}'")
+    _dx, _dy = _dir_to_offset[args.goal_offset_dir]
+    goal_x_offset = _dx * args.goal_offset_dist
+    goal_y_offset = _dy * args.goal_offset_dist
+
     base_env = make_maze_env("ant", "maze", maze_type=args.maze_type, terminate_at_goal=False, add_noise_to_init=not args.fixed_init_ij, add_noise_to_goal=False)
     env = RandomInitGoalEnv(
         base_env,
-        goal_x_offset=args.goal_x_offset,
-        goal_y_offset=args.goal_y_offset,
+        goal_x_offset=goal_x_offset,
+        goal_y_offset=goal_y_offset,
         fixed_init_ij=args.fixed_init_ij,
         avoid_walls=args.avoid_walls,
         concatenate_only_xy=args.concatenate_only_xy
