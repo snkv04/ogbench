@@ -25,7 +25,7 @@ from tensordict.nn import CudaGraphModule
 from torchrl.data import LazyTensorStorage, ReplayBuffer
 
 from ogbench.locomaze.maze import make_maze_env
-from ogbench.manipspace.oracles.hierarchical.utils import save_episode_video
+from ogbench.manipspace.oracles.hierarchical.utils import add_text_overlay, save_episode_video
 from hierarchical_training_scripts.train_cube_lowlevel_td3 import Actor, QNetwork
 from hierarchical_training_scripts.train_cube_hrl_dqn import (
     _log_param_counts,
@@ -227,6 +227,20 @@ class AntMazeTD3Agent:
             return self.actor(obs_tensor).clamp(self.action_low, self.action_high)[0].cpu().numpy()
 
 
+def _maze_validation_frame(env: gym.Env, agent) -> np.ndarray:
+    """Render one RGB frame; if ``agent`` is hierarchical, overlay active option index and name."""
+    frame = env.render()
+    if not (hasattr(agent, "active_option") and hasattr(agent, "_options")):
+        return frame
+    current_option_idx = None
+    current_option_name = None
+    ao = agent.active_option
+    if ao is not None:
+        current_option_idx = agent._options.index(ao)
+        current_option_name = ao.name
+    return add_text_overlay(frame, task_name=None, option_idx=current_option_idx, option_text=current_option_name)
+
+
 def run_maze_validation_episodes(
     env,
     agent,
@@ -240,6 +254,9 @@ def run_maze_validation_episodes(
 
     Success is determined by info['success'] == 1.0, which MazeEnv sets when
     the agent is within goal_tol of the goal.
+
+    When saving videos, if ``agent`` has ``active_option`` and ``_options`` (hierarchical agent),
+    each frame is passed through ``add_text_overlay`` with option index and name only.
     """
     assert num_episode_videos <= num_episodes, "Cannot make more videos than episodes"
 
@@ -262,7 +279,7 @@ def run_maze_validation_episodes(
         episode_had_success = False
         episode_return = 0.0
         save_this_ep = ep_idx < num_episode_videos
-        episode_frames = [env.render()] if save_this_ep else []
+        episode_frames = [_maze_validation_frame(env, agent)] if save_this_ep else []
 
         done = False
         step = 0
@@ -285,7 +302,7 @@ def run_maze_validation_episodes(
                     filtered_tasks_completed_at_end += 1
 
             if save_this_ep:
-                episode_frames.append(env.render())
+                episode_frames.append(_maze_validation_frame(env, agent))
 
         logging.info(f"Episode {ep_idx} terminated after {step} steps")
         episode_returns.append(episode_return)
