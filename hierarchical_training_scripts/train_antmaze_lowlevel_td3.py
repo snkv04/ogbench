@@ -98,6 +98,8 @@ class Args:
     episode_window_len: int = 20
     """number of recent episodes to average over for training metrics"""
 
+    reward_type: str = "sparse"
+    """reward type: 'sparse' (binary success signal) or 'dense' (negative euclidean distance to goal)"""
     fixed_init_ij: bool = False
     """if True, always start from init_ij=(3,2) with no init noise; if False, randomly sample from free cells"""
     avoid_walls: bool = False
@@ -129,8 +131,18 @@ class RandomInitGoalEnv(gym.Wrapper):
     expanding the observation space from (29,) to (31,) or (58,) respectively.
     """
 
-    def __init__(self, env, goal_x_offset: float, goal_y_offset: float, fixed_init_ij: bool = False, avoid_walls: bool = False, concatenate_only_xy: bool = True):
+    def __init__(
+        self,
+        env,
+        goal_x_offset: float,
+        goal_y_offset: float,
+        fixed_init_ij: bool = False,
+        avoid_walls: bool = False,
+        concatenate_only_xy: bool = True,
+        reward_type: str = "sparse"
+    ):
         super().__init__(env)
+        assert reward_type in ("sparse", "dense"), f"reward_type must be 'sparse' or 'dense', got '{reward_type}'"
         maze_map = env.unwrapped.maze_map
         rows, cols = np.where(maze_map == 0)
         all_free = set(zip(rows.tolist(), cols.tolist()))
@@ -141,6 +153,7 @@ class RandomInitGoalEnv(gym.Wrapper):
         self._fixed_init_ij = fixed_init_ij
         self._concatenate_only_xy = concatenate_only_xy
         self._goal_xy_offset = (goal_x_offset, goal_y_offset)
+        self._reward_type = reward_type
         logging.info(f"self._free_cells = {self._free_cells}")
 
         base_shape = env.observation_space.shape  # (29,)
@@ -176,6 +189,10 @@ class RandomInitGoalEnv(gym.Wrapper):
 
     def step(self, action):
         obs, reward, terminated, truncated, info = self.env.step(action)
+        if self._reward_type == "dense":
+            agent_xy = self.unwrapped.get_xy()
+            goal_xy = self.unwrapped.cur_goal_xy
+            reward = -float(np.linalg.norm(agent_xy - goal_xy))
         return self._augment_obs(obs), reward, terminated, truncated, info
 
 
@@ -369,7 +386,8 @@ if __name__ == "__main__":
         goal_y_offset=goal_y_offset,
         fixed_init_ij=args.fixed_init_ij,
         avoid_walls=args.avoid_walls,
-        concatenate_only_xy=args.concatenate_only_xy
+        concatenate_only_xy=args.concatenate_only_xy,
+        reward_type=args.reward_type,
     )
     env = gym.wrappers.TimeLimit(env, max_episode_steps=args.max_episode_steps)
     env.action_space.seed(args.seed)
