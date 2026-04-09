@@ -47,7 +47,7 @@ class Args:
     """if toggled, cuda will be enabled by default"""
 
     # Environment
-    maze_type: str = "medium"
+    maze_type: str = "arena"
     """maze type: one of 'arena', 'medium', 'large', 'giant', 'teleport'"""
     max_episode_steps: int = 1000
     """maximum steps per episode"""
@@ -139,7 +139,8 @@ class RandomInitGoalEnv(gym.Wrapper):
         fixed_init_ij: bool = False,
         avoid_walls: bool = False,
         concatenate_only_xy: bool = True,
-        reward_type: str = "sparse"
+        reward_type: str = "sparse",
+        augment_observations: bool = True,
     ):
         super().__init__(env)
         assert reward_type in ("sparse", "dense"), f"reward_type must be 'sparse' or 'dense', got '{reward_type}'"
@@ -154,19 +155,30 @@ class RandomInitGoalEnv(gym.Wrapper):
         self._concatenate_only_xy = concatenate_only_xy
         self._goal_xy_offset = (goal_x_offset, goal_y_offset)
         self._reward_type = reward_type
+        self._augment_observations = augment_observations
         logging.info(f"self._free_cells = {self._free_cells}")
 
         base_shape = env.observation_space.shape  # (29,)
         prefix_size = 2 if concatenate_only_xy else base_shape[0]
         self._episode_init_prefix = np.zeros(prefix_size, dtype=np.float64)
-        self.observation_space = gym.spaces.Box(
-            low=-np.inf,
-            high=np.inf,
-            shape=(base_shape[0] + prefix_size,),
-            dtype=env.observation_space.dtype,
-        )
+        if augment_observations:
+            self.observation_space = gym.spaces.Box(
+                low=-np.inf,
+                high=np.inf,
+                shape=(base_shape[0] + prefix_size,),
+                dtype=env.observation_space.dtype,
+            )
+        else:
+            self.observation_space = gym.spaces.Box(
+                low=-np.inf,
+                high=np.inf,
+                shape=base_shape,
+                dtype=env.observation_space.dtype,
+            )
 
     def _augment_obs(self, obs):
+        if not self._augment_observations:
+            return obs
         return np.concatenate([self._episode_init_prefix, obs])
 
     def reset(self, *, seed=None, options=None, **kwargs):
