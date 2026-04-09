@@ -103,7 +103,7 @@ class Args:
     fixed_init_ij: bool = False
     """if True, always start from init_ij=(3,2) with no init noise; if False, randomly sample from free cells"""
     avoid_walls: bool = False
-    """if True, only sample init cells where the cell above, (i+1, j), is also free"""
+    """if True, only sample init cells where the adjacent cell in ``goal_offset_dir`` (toward the goal) is also free"""
     concatenate_only_xy: bool = True
     """if True, prepend only init xy (obs size +2); if False, prepend full init obs (obs size *2)"""
     goal_offset_dir: str = "up"
@@ -124,6 +124,12 @@ def _is_goal_xy_reachable(maze_env, goal_xy) -> bool:
     return 0 <= i < maze_map.shape[0] and 0 <= j < maze_map.shape[1] and maze_map[i, j] == 0
 
 
+# World goal offset in (dx, dy) units of maze_unit; must match MazeEnv ij convention (ij_to_xy).
+_DIR_TO_XY_OFFSET = {"up": (0.0, 1.0), "down": (0.0, -1.0), "right": (1.0, 0.0), "left": (-1.0, 0.0)}
+# Neighbor of init (i,j) toward the goal: one step in grid along the same direction as ``_DIR_TO_XY_OFFSET``.
+_DIR_TO_NEIGHBOR_DELTA_IJ = {"up": (1, 0), "down": (-1, 0), "right": (0, 1), "left": (0, -1)}
+
+
 class RandomInitGoalEnv(gym.Wrapper):
     """Wrapper that randomly samples init and goal positions from free maze cells on each reset.
 
@@ -134,8 +140,8 @@ class RandomInitGoalEnv(gym.Wrapper):
     def __init__(
         self,
         env,
-        goal_x_offset: float,
-        goal_y_offset: float,
+        goal_offset_dir: str,
+        goal_offset_dist: float,
         fixed_init_ij: bool = False,
         avoid_walls: bool = False,
         concatenate_only_xy: bool = True,
@@ -144,13 +150,23 @@ class RandomInitGoalEnv(gym.Wrapper):
     ):
         super().__init__(env)
         assert reward_type in ("sparse", "dense"), f"reward_type must be 'sparse' or 'dense', got '{reward_type}'"
+        if goal_offset_dir not in _DIR_TO_XY_OFFSET:
+            raise ValueError(f"goal_offset_dir must be one of {list(_DIR_TO_XY_OFFSET)}, got '{goal_offset_dir}'")
+        dx, dy = _DIR_TO_XY_OFFSET[goal_offset_dir]
+        goal_x_offset = dx * goal_offset_dist
+        goal_y_offset = dy * goal_offset_dist
+
         maze_map = env.unwrapped.maze_map
         rows, cols = np.where(maze_map == 0)
         all_free = set(zip(rows.tolist(), cols.tolist()))
-        self._free_cells = [
-            (i, j) for (i, j) in all_free
-            if not avoid_walls or (i + 1, j) in all_free
-        ]
+        if avoid_walls:
+            di, dj = _DIR_TO_NEIGHBOR_DELTA_IJ[goal_offset_dir]
+            self._free_cells = [
+                (i, j) for (i, j) in all_free
+                if (i + di, j + dj) in all_free
+            ]
+        else:
+            self._free_cells = list(all_free)
         self._fixed_init_ij = fixed_init_ij
         self._concatenate_only_xy = concatenate_only_xy
         self._goal_xy_offset = (goal_x_offset, goal_y_offset)
@@ -403,18 +419,11 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
 
     # Env setup: MazeEnv wrapped to randomly sample init/goal on each reset.
-    _dir_to_offset = {"up": (0.0, 1.0), "down": (0.0, -1.0), "right": (1.0, 0.0), "left": (-1.0, 0.0)}
-    if args.goal_offset_dir not in _dir_to_offset:
-        raise ValueError(f"goal_offset_dir must be one of {list(_dir_to_offset)}, got '{args.goal_offset_dir}'")
-    _dx, _dy = _dir_to_offset[args.goal_offset_dir]
-    goal_x_offset = _dx * args.goal_offset_dist
-    goal_y_offset = _dy * args.goal_offset_dist
-
     base_env = make_maze_env("ant", "maze", maze_type=args.maze_type, terminate_at_goal=False, add_noise_to_init=not args.fixed_init_ij, add_noise_to_goal=False)
     env = RandomInitGoalEnv(
         base_env,
-        goal_x_offset=goal_x_offset,
-        goal_y_offset=goal_y_offset,
+        goal_offset_dir=args.goal_offset_dir,
+        goal_offset_dist=args.goal_offset_dist,
         fixed_init_ij=args.fixed_init_ij,
         avoid_walls=args.avoid_walls,
         concatenate_only_xy=args.concatenate_only_xy,
