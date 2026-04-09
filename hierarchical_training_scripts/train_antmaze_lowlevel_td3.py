@@ -241,6 +241,8 @@ def run_maze_validation_episodes(
     Success is determined by info['success'] == 1.0, which MazeEnv sets when
     the agent is within goal_tol of the goal.
     """
+    assert num_episode_videos <= num_episodes, "Cannot make more videos than episodes"
+
     tasks_completed_at_end = 0.0
     tasks_completed_at_all = 0.0
     episode_returns = []

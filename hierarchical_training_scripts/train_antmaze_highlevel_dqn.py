@@ -90,6 +90,9 @@ class Args:
     load_path: str = ""
     save_first_val_episodes_videos: int = 0
 
+    validation_greedy: bool = True
+    """If True, high-level DQN uses epsilon=0 (greedy discrete actions) during validation. If False, keeps the current training epsilon (same epsilon-greedy as the training step)."""
+
     run_profiling: bool = False
     profiling_start: int = 0
     profiling_end: int = 1_000_000
@@ -429,15 +432,19 @@ if __name__ == "__main__":
             )
             _prof_checkpoint(args, global_step, "save_checkpoint")
 
-            logging.info(f"Running validation with 10 episodes...")
+            logging.info(
+                f"Running validation with 10 episodes "
+                f"(validation_greedy={args.validation_greedy})..."
+            )
             val_eps = agent.epsilon
-            agent.epsilon = 0.0
+            if args.validation_greedy:
+                agent.epsilon = 0.0
             q_network.eval()
             val_metrics = run_maze_validation_episodes(
                 env=env,
                 agent=agent,
                 num_episodes=10,
-                num_episode_videos=2,
+                num_episode_videos=args.save_first_val_episodes_videos,
                 save_dir=save_path,
                 video_prefix=f"validation_step{global_step}",
             )
