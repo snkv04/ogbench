@@ -58,10 +58,10 @@ class Args:
     add_noise_to_goal: bool = False
     concatenate_only_xy: bool = True
 
-    checkpoint_up: str = "/home/svangaru/Desktop/ogbench/.ogbench/td3_runs/antmaze-arena__train_antmaze_lowlevel_td3__1__True__True__2026-04-07_02-05-17/checkpoints/checkpoint_step1950000.pt"
-    checkpoint_down: str = "/home/svangaru/Desktop/ogbench/.ogbench/td3_runs/antmaze-arena__train_antmaze_lowlevel_td3__1__True__True__2026-04-07_02-05-47/checkpoints/checkpoint_step1950000.pt"
-    checkpoint_left: str = "/home/svangaru/Desktop/ogbench/.ogbench/td3_runs/antmaze-arena__train_antmaze_lowlevel_td3__1__True__True__2026-04-07_02-06-36/checkpoints/checkpoint_step1100000.pt"
-    checkpoint_right: str = "/home/svangaru/Desktop/ogbench/.ogbench/td3_runs/antmaze-arena__train_antmaze_lowlevel_td3__1__True__True__2026-04-07_02-06-23/checkpoints/checkpoint_step1950000.pt"
+    checkpoint_up: str = ""
+    checkpoint_down: str = ""
+    checkpoint_left: str = ""
+    checkpoint_right: str = ""
     termination_time: int = 50
     """Max low-level env steps per option before forced termination."""
 
@@ -82,6 +82,9 @@ class Args:
     train_frequency: int = 4
     max_grad_norm: float = 1.0
     q_hidden_dim: int = 256
+
+    reward_type: str = "sparse"
+    """reward type: 'sparse' (binary success signal from MazeEnv) or 'dense' (negative euclidean distance to goal)"""
 
     save_dir: str = ".ogbench/dqn_antmaze_hl_runs"
     checkpoint_freq: int = 100_000
@@ -108,6 +111,29 @@ def maze_task_done(env: gym.Env, info: dict) -> bool:
     return float(info.get("success", 0.0)) >= 1.0
 
 
+class AntMazeHLRewardWrapper(gym.Wrapper):
+    """Applies sparse or dense reward shaping at the high level.
+
+    sparse: pass through the reward from MazeEnv unchanged.
+    dense:  replace reward with negative Euclidean distance from agent xy to goal xy.
+    """
+
+    def __init__(self, env: gym.Env, reward_type: str = "sparse"):
+        super().__init__(env)
+        assert reward_type in ("sparse", "dense"), (
+            f"reward_type must be 'sparse' or 'dense', got '{reward_type}'"
+        )
+        self._reward_type = reward_type
+
+    def step(self, action):
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        if self._reward_type == "dense":
+            agent_xy = self.unwrapped.get_xy()
+            goal_xy = self.unwrapped.cur_goal_xy
+            reward = -float(np.linalg.norm(agent_xy - goal_xy))
+        return obs, reward, terminated, truncated, info
+
+
 def make_antmaze_hrl_env(args: Args) -> gym.Env:
     base_env = make_maze_env(
         "ant",
@@ -117,6 +143,7 @@ def make_antmaze_hrl_env(args: Args) -> gym.Env:
         add_noise_to_init=args.add_noise_to_init,
         add_noise_to_goal=args.add_noise_to_goal,
     )
+    base_env = AntMazeHLRewardWrapper(base_env, reward_type=args.reward_type)
     return gym.wrappers.TimeLimit(base_env, max_episode_steps=args.max_episode_steps)
 
 

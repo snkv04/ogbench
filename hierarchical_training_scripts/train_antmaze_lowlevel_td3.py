@@ -354,9 +354,9 @@ def _log_reset(env, episode_idx: int, save_dir: str) -> None:
     true_goal_xy = unwrapped.cur_goal_xy
     task_info = unwrapped.cur_task_info or {}
     init_ij = task_info.get("init_ij")
-    logging.info(
-        f"[ep {episode_idx}] init_ij={init_ij}  true_init_xy={true_init_xy}  true_goal_xy={true_goal_xy}"
-    )
+    # logging.info(
+    #     f"[ep {episode_idx}] init_ij={init_ij}  true_init_xy={true_init_xy}  true_goal_xy={true_goal_xy}"
+    # )
     frame = env.render()
     os.makedirs(save_dir, exist_ok=True)
     Image.fromarray(frame).save(os.path.join(save_dir, f"reset_ep{episode_idx:06d}.png"))
@@ -575,10 +575,14 @@ if __name__ == "__main__":
                 args.profiling_dict = {
                     "select_agent_action": 0.0,
                     "step_env": 0.0,
+                    "render_env_for_train_vids": 0.0,
                     "add_transition_to_rb": 0.0,
-                    "update_td3_params": 0.0,
+                    "update_td3_critic": 0.0,
+                    "update_td3_actor": 0.0,
                     "log_to_wandb": 0.0,
-                    "reset_env": 0.0,
+                    "reset_env_at_ep_end": 0.0,
+                    "run_validation": 0.0,
+                    "save_td3_checkpoint": 0.0,
                 }
         if global_step == args.measure_burnin + args.learning_starts:
             start_time = time.time()
@@ -598,7 +602,7 @@ if __name__ == "__main__":
                 ),
                 device=device, dtype=torch.float
             )
-            logging.info(f"At global step {global_step}, current exploration noise = {current_exploration_noise}")
+            # logging.info(f"At global step {global_step}, current exploration noise = {current_exploration_noise}")
             action_tensor = policy(obs=obs, exploration_noise=current_exploration_noise).clamp(action_low, action_high)
             action = action_tensor[0].cpu().numpy()
         _prof_checkpoint(args, global_step, "select_agent_action")
@@ -611,6 +615,7 @@ if __name__ == "__main__":
 
         if save_this_ep:
             episode_frames.append(env.render())
+        _prof_checkpoint(args, global_step, "render_env_for_train_vids")
 
         rewards = torch.as_tensor([[env_reward]], device=device, dtype=torch.float)
         episode_return += float(env_reward)
@@ -640,13 +645,14 @@ if __name__ == "__main__":
         # ALGO LOGIC: training.
         if global_step > args.learning_starts:
             out_main = update_main(data)
+            _prof_checkpoint(args, global_step, "update_td3_critic")
             if global_step % args.policy_frequency == 0:
                 out_main.update(update_pol(data))
 
                 # lerp is defined as x' = x + w (y-x), which is equivalent to x' = (1-w) x + w y
                 qnet_target_params.lerp_(qnet_params.data, args.tau)
                 target_actor_params.lerp_(actor_params.data, args.tau)
-            _prof_checkpoint(args, global_step, "update_td3_params")
+            _prof_checkpoint(args, global_step, "update_td3_actor")
 
             if global_step % 100 == 0 and start_time is not None:
                 speed = (global_step - measure_burnin) / (time.time() - start_time)
@@ -702,7 +708,7 @@ if __name__ == "__main__":
             episode_return = 0.0
             episode_had_success = False
             episode_goal_reachable = _is_goal_xy_reachable(env.unwrapped, env.unwrapped.cur_goal_xy)
-            logging.info(f"Is goal {env.unwrapped.cur_goal_xy} reachable? {episode_goal_reachable}")
+            # logging.info(f"Is goal {env.unwrapped.cur_goal_xy} reachable? {episode_goal_reachable}")
 
             save_this_ep = (
                 args.save_every_k_training_episodes > 0
@@ -713,7 +719,7 @@ if __name__ == "__main__":
             else:
                 episode_frames = []
 
-            _prof_checkpoint(args, global_step, "reset_env")
+            _prof_checkpoint(args, global_step, "reset_env_at_ep_end")
 
         # Optional validation at fixed step intervals
         if global_step > args.learning_starts and global_step % args.validation_freq == 0:
@@ -756,6 +762,7 @@ if __name__ == "__main__":
                 },
                 step=global_step,
             )
+            _prof_checkpoint(args, global_step, "run_validation")
 
             checkpoint_path = os.path.join(".ogbench", "td3_runs", run_name, "checkpoints", f"checkpoint_step{global_step}.pt")
             save_td3_checkpoint(
@@ -768,6 +775,7 @@ if __name__ == "__main__":
                 q_optimizer=q_optimizer,
                 save_path=checkpoint_path,
             )
+            _prof_checkpoint(args, global_step, "save_td3_checkpoint")
 
     # Profiling output
     if args.run_profiling:
