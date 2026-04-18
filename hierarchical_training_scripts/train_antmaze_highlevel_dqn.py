@@ -84,7 +84,7 @@ class Args:
     q_hidden_dim: int = 256
 
     reward_type: str = "sparse"
-    """reward type: 'sparse' (binary success signal from MazeEnv) or 'dense' (negative euclidean distance to goal)"""
+    """reward type: 'sparse' (binary success signal from MazeEnv), 'dense' (negative euclidean distance per timestep), or 'dense_on_options' (zero per-timestep reward; option transition reward is dense reward at the last timestep of the option)"""
 
     save_dir: str = ".ogbench/dqn_antmaze_hl_runs"
     checkpoint_freq: int = 100_000
@@ -111,26 +111,35 @@ def maze_task_done(env: gym.Env, info: dict) -> bool:
     return float(info.get("success", 0.0)) >= 1.0
 
 
+def _dense_reward_from_env(env: gym.Env) -> float:
+    """Negative Euclidean distance from agent xy to goal xy at the current env state."""
+    agent_xy = env.unwrapped.get_xy()
+    goal_xy = env.unwrapped.cur_goal_xy
+    return -float(np.linalg.norm(agent_xy - goal_xy))
+
+
 class AntMazeHLRewardWrapper(gym.Wrapper):
     """Applies sparse or dense reward shaping at the high level.
 
-    sparse: pass through the reward from MazeEnv unchanged.
-    dense:  replace reward with negative Euclidean distance from agent xy to goal xy.
+    sparse:          pass through the reward from MazeEnv unchanged.
+    dense:           replace reward with negative Euclidean distance from agent xy to goal xy.
+    dense_on_options: return 0 per timestep; option transition reward is set to the dense reward
+                     at the last timestep of the option (handled in the training loop).
     """
 
     def __init__(self, env: gym.Env, reward_type: str = "sparse"):
         super().__init__(env)
-        assert reward_type in ("sparse", "dense"), (
-            f"reward_type must be 'sparse' or 'dense', got '{reward_type}'"
+        assert reward_type in ("sparse", "dense", "dense_on_options"), (
+            f"reward_type must be 'sparse', 'dense', or 'dense_on_options', got '{reward_type}'"
         )
         self._reward_type = reward_type
 
     def step(self, action):
         obs, reward, terminated, truncated, info = self.env.step(action)
         if self._reward_type == "dense":
-            agent_xy = self.unwrapped.get_xy()
-            goal_xy = self.unwrapped.cur_goal_xy
-            reward = -float(np.linalg.norm(agent_xy - goal_xy))
+            reward = _dense_reward_from_env(self)
+        elif self._reward_type == "dense_on_options":
+            reward = 0.0
         return obs, reward, terminated, truncated, info
 
 
@@ -342,6 +351,10 @@ if __name__ == "__main__":
         if agent.was_new_option_selected():
             # logging.info(f"Selected a new option at global_step={global_step}")
             if current_hl_info is not None:
+                if args.reward_type == "dense_on_options":
+                    opt_reward = _dense_reward_from_env(env)
+                    current_hl_info["accumulated_reward"] = opt_reward
+                    episode_return += opt_reward
                 rb.add(
                     current_hl_info["obs"].cpu().numpy(),
                     current_hl_info["next_obs"].cpu().numpy(),
@@ -366,6 +379,7 @@ if __name__ == "__main__":
         done = terminated or truncated
         episode_step_count += 1
 
+        # reward will be 0 if using dense_on_options
         current_hl_info["accumulated_reward"] += (args.gamma ** current_hl_info["option_length"]) * reward
         current_hl_info["option_length"] += 1
         episode_return += reward
@@ -374,6 +388,10 @@ if __name__ == "__main__":
             episode_had_completion = True
 
         if done:
+            if args.reward_type == "dense_on_options":
+                opt_reward = _dense_reward_from_env(env)
+                current_hl_info["accumulated_reward"] = opt_reward
+                episode_return += opt_reward
             current_hl_info["done"] = True
             rb.add(
                 current_hl_info["obs"].cpu().numpy(),
