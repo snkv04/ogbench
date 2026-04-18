@@ -98,7 +98,6 @@ class Args:
 
     run_profiling: bool = False
     profiling_start: int = 0
-    profiling_end: int = 1_000_000
 
 
 def linear_schedule(start_e: float, end_e: float, duration: int, t: int) -> float:
@@ -319,22 +318,19 @@ if __name__ == "__main__":
 
     pbar = tqdm.tqdm(range(start_global_step, start_global_step + args.total_timesteps))
     for global_step in pbar:
-        if args.run_profiling:
-            if global_step >= args.profiling_end:
-                break
-            if global_step == args.profiling_start:
-                args.last_time = time.time()
-                args.profiling_dict = {
-                    "calculate_epsilon": 0.0,
-                    "select_agent_action": 0.0,
-                    "add_transition_to_rb": 0.0,
-                    "step_env": 0.0,
-                    "reset_env_on_ep_end": 0.0,
-                    "update_dqn_params": 0.0,
-                    "log_to_wandb": 0.0,
-                    "save_checkpoint": 0.0,
-                    "run_validation": 0.0,
-                }
+        if args.run_profiling and global_step == args.profiling_start:
+            args.last_time = time.time()
+            args.profiling_dict = {
+                "calculate_epsilon": 0.0,
+                "select_agent_action": 0.0,
+                "add_transition_to_rb": 0.0,
+                "step_env": 0.0,
+                "reset_env_on_ep_end": 0.0,
+                "update_dqn_params": 0.0,
+                "log_to_wandb": 0.0,
+                "save_checkpoint": 0.0,
+                "run_validation": 0.0,
+            }
         if global_step == args.learning_starts + args.measure_burnin:
             start_time = time.time()
             start_burnin_global_step = global_step
@@ -524,10 +520,10 @@ if __name__ == "__main__":
 
     if args.run_profiling:
         _save_profiling_json(
-            args.profiling_dict, save_path, args.profiling_start, args.profiling_end, "DQN_antmaze_hl"
+            args.profiling_dict, save_path, args.profiling_start, args.total_timesteps, "DQN_antmaze_hl"
         )
         _save_profiling_bar_graph(
-            args.profiling_dict, save_path, args.profiling_start, args.profiling_end, "DQN_antmaze_hl"
+            args.profiling_dict, save_path, args.profiling_start, args.total_timesteps, "DQN_antmaze_hl"
         )
 
     env.close()

@@ -103,7 +103,6 @@ class Args:
     # Profiling
     run_profiling: bool = False
     profiling_start: int = 0
-    profiling_end: int = 1000000
 
 
 def _save_profiling_json(
@@ -521,23 +520,20 @@ poetry run pip install "stable_baselines3==2.0.0a1"
     # Main training loop
     pbar = tqdm.tqdm(range(start_global_step, start_global_step + args.total_timesteps))
     for global_step in pbar:
-        if args.run_profiling:
-            if global_step >= args.profiling_end:
-                break
-            if global_step == args.profiling_start:
-                args.last_time = time.time()
-                args.profiling_dict = {
-                    "calculate_epsilon": 0.0,
-                    "select_agent_action": 0.0,
-                    "add_transition_to_rb": 0.0,
-                    "step_env": 0.0,
-                    "render_realtime": 0.0,
-                    "reset_env_on_ep_end": 0.0,
-                    "update_dqn_params": 0.0,
-                    "log_to_wandb": 0.0,
-                    "save_checkpoint": 0.0,
-                    "run_validation": 0.0,
-                }
+        if args.run_profiling and global_step == args.profiling_start:
+            args.last_time = time.time()
+            args.profiling_dict = {
+                "calculate_epsilon": 0.0,
+                "select_agent_action": 0.0,
+                "add_transition_to_rb": 0.0,
+                "step_env": 0.0,
+                "render_realtime": 0.0,
+                "reset_env_on_ep_end": 0.0,
+                "update_dqn_params": 0.0,
+                "log_to_wandb": 0.0,
+                "save_checkpoint": 0.0,
+                "run_validation": 0.0,
+            }
         # Start measuring speed after burn-in
         if global_step == args.learning_starts + args.measure_burnin:
             start_time = time.time()
@@ -758,10 +754,10 @@ poetry run pip install "stable_baselines3==2.0.0a1"
     # Profiling output (if profiling was active)
     if args.run_profiling:
         _save_profiling_json(
-            args.profiling_dict, save_path, args.profiling_start, args.profiling_end, "DQN"
+            args.profiling_dict, save_path, args.profiling_start, args.total_timesteps, "DQN"
         )
         _save_profiling_bar_graph(
-            args.profiling_dict, save_path, args.profiling_start, args.profiling_end, "DQN"
+            args.profiling_dict, save_path, args.profiling_start, args.total_timesteps, "DQN"
         )
 
     # Cleanup

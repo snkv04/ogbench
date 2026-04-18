@@ -115,7 +115,6 @@ class Args:
     # Profiling
     run_profiling: bool = False
     profiling_start: int = 0
-    profiling_end: int = 1000000
 
 
 class Actor(nn.Module):
@@ -568,20 +567,17 @@ if __name__ == "__main__":
 
     # Main training loop
     for global_step in pbar:
-        if args.run_profiling:
-            if global_step >= args.profiling_end:
-                break
-            if global_step == args.profiling_start:
-                args.last_time = time.time()
-                args.profiling_dict = {
-                    "select_agent_action": 0.0,
-                    "step_env": 0.0,
-                    "compute_option_reward": 0.0,
-                    "add_transition_to_rb": 0.0,
-                    "update_td3_params": 0.0,
-                    "log_to_wandb": 0.0,
-                    "reset_env": 0.0,
-                }
+        if args.run_profiling and global_step == args.profiling_start:
+            args.last_time = time.time()
+            args.profiling_dict = {
+                "select_agent_action": 0.0,
+                "step_env": 0.0,
+                "compute_option_reward": 0.0,
+                "add_transition_to_rb": 0.0,
+                "update_td3_params": 0.0,
+                "log_to_wandb": 0.0,
+                "reset_env": 0.0,
+            }
         if global_step == args.measure_burnin + args.learning_starts:
             start_time = time.time()
             measure_burnin = global_step
@@ -739,10 +735,10 @@ if __name__ == "__main__":
         save_path = os.path.join(".ogbench", "td3_profiling", run_name)
         os.makedirs(save_path, exist_ok=True)
         _save_profiling_json(
-            args.profiling_dict, save_path, args.profiling_start, args.profiling_end, "TD3"
+            args.profiling_dict, save_path, args.profiling_start, args.total_timesteps, "TD3"
         )
         _save_profiling_bar_graph(
-            args.profiling_dict, save_path, args.profiling_start, args.profiling_end, "TD3"
+            args.profiling_dict, save_path, args.profiling_start, args.total_timesteps, "TD3"
         )
 
     env.close()

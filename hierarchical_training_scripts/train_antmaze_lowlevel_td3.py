@@ -93,7 +93,7 @@ class Args:
     """number of episodes to run validation for"""
     num_episode_videos: int = 2
     """number of episode videos to save"""
-    save_every_k_training_episodes: int = 50
+    save_every_k_training_episodes: int = 0
     """save a training video every k episodes (0 to disable)"""
     episode_window_len: int = 20
     """number of recent episodes to average over for training metrics"""
@@ -114,7 +114,6 @@ class Args:
     # Profiling
     run_profiling: bool = False
     profiling_start: int = 0
-    profiling_end: int = 1_000_000
 
 
 def _is_goal_xy_reachable(maze_env, goal_xy) -> bool:
@@ -199,7 +198,7 @@ class RandomInitGoalEnv(gym.Wrapper):
 
     def reset(self, *, seed=None, options=None, **kwargs):
         unwrapped = self.unwrapped
-        init_ij = (3, 2) if self._fixed_init_ij else self._free_cells[np.random.randint(len(self._free_cells))]
+        init_ij = (1, 1) if self._fixed_init_ij else self._free_cells[np.random.randint(len(self._free_cells))]
         task_info = dict(
             init_ij=init_ij,
             # init_xy=unwrapped.ij_to_xy(init_ij),
@@ -567,23 +566,20 @@ if __name__ == "__main__":
 
     # Main training loop
     for global_step in pbar:
-        if args.run_profiling:
-            if global_step >= args.profiling_end:
-                break
-            if global_step == args.profiling_start:
-                args.last_time = time.time()
-                args.profiling_dict = {
-                    "select_agent_action": 0.0,
-                    "step_env": 0.0,
-                    "render_env_for_train_vids": 0.0,
-                    "add_transition_to_rb": 0.0,
-                    "update_td3_critic": 0.0,
-                    "update_td3_actor": 0.0,
-                    "log_to_wandb": 0.0,
-                    "reset_env_at_ep_end": 0.0,
-                    "run_validation": 0.0,
-                    "save_td3_checkpoint": 0.0,
-                }
+        if args.run_profiling and global_step == args.profiling_start:
+            args.last_time = time.time()
+            args.profiling_dict = {
+                "select_agent_action": 0.0,
+                "step_env": 0.0,
+                "render_env_for_train_vids": 0.0,
+                "add_transition_to_rb": 0.0,
+                "update_td3_critic": 0.0,
+                "update_td3_actor": 0.0,
+                "log_to_wandb": 0.0,
+                "reset_env_at_ep_end": 0.0,
+                "run_validation": 0.0,
+                "save_td3_checkpoint": 0.0,
+            }
         if global_step == args.measure_burnin + args.learning_starts:
             start_time = time.time()
             measure_burnin = global_step
@@ -782,10 +778,10 @@ if __name__ == "__main__":
         save_path = os.path.join(".ogbench", "td3_profiling", run_name)
         os.makedirs(save_path, exist_ok=True)
         _save_profiling_json(
-            args.profiling_dict, save_path, args.profiling_start, args.profiling_end, "TD3"
+            args.profiling_dict, save_path, args.profiling_start, args.total_timesteps, "TD3"
         )
         _save_profiling_bar_graph(
-            args.profiling_dict, save_path, args.profiling_start, args.profiling_end, "TD3"
+            args.profiling_dict, save_path, args.profiling_start, args.total_timesteps, "TD3"
         )
 
     env.close()
