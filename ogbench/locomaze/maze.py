@@ -46,6 +46,7 @@ def make_maze_env(loco_env_type, maze_env_type, *args, **kwargs):
             add_noise_to_init=True,
             reward_task_id=None,
             use_oracle_rep=False,
+            goal_radius=None,
             *args,
             **kwargs,
         ):
@@ -65,6 +66,7 @@ def make_maze_env(loco_env_type, maze_env_type, *args, **kwargs):
                     single-task mode with the specified task ID. The task ID must be either a valid task ID or 0, where
                     0 means using the default task.
                 use_oracle_rep: Whether to use oracle goal representations.
+                goal_radius: If not None, overrides the default goal tolerance distance for success.
                 *args: Additional arguments to pass to the parent locomotion environment.
                 **kwargs: Additional keyword arguments to pass to the parent locomotion environment.
             """
@@ -86,7 +88,7 @@ def make_maze_env(loco_env_type, maze_env_type, *args, **kwargs):
             self._offset_x = 4
             self._offset_y = 4
             self._noise = 1.0
-            self._goal_tol = 1.0 if loco_env_type == 'point' else 0.5
+            self._goal_tol = goal_radius if goal_radius is not None else (1.0 if loco_env_type == 'point' else 0.5)
 
             # Define maze map.
             self._teleport_info = None
@@ -516,7 +518,8 @@ def make_maze_env(loco_env_type, maze_env_type, *args, **kwargs):
             else:
                 self.cur_goal_xy = goal_xy
             if self._ob_type == 'states':
-                self.model.geom('target').pos[:2] = goal_xy
+                self.model.geom('target').pos[:2] = self.cur_goal_xy
+                self.model.geom('target').size[0] = self._goal_tol
 
         def get_oracle_subgoal(self, start_xy, goal_xy):
             """Get the oracle subgoal for the agent.

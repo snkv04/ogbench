@@ -58,6 +58,8 @@ class Args:
     add_noise_to_goal: bool = False
     reward_task_id: int = 0
     """Fixed task ID for MazeEnv. 0 uses the maze-type default task; positive int selects that task (1-indexed)."""
+    goal_radius: Optional[float] = None
+    """Success radius for goal reaching. If None, uses MazeEnv default (0.5 for ant)."""
     concatenate_only_xy: bool = True
 
     checkpoint_up: str = ""
@@ -153,6 +155,7 @@ def make_antmaze_hrl_env(args: Args) -> gym.Env:
         add_noise_to_init=args.add_noise_to_init,
         add_noise_to_goal=args.add_noise_to_goal,
         reward_task_id=args.reward_task_id,
+        goal_radius=args.goal_radius,
     )
     base_env = AntMazeHLRewardWrapper(base_env, reward_type=args.reward_type)
     return gym.wrappers.TimeLimit(base_env, max_episode_steps=args.max_episode_steps)
