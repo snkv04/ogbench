@@ -100,6 +100,31 @@ class MoveInDirectionOption(Option):
         self._prefix = None
 
 
+class NoOpOption(Option):
+    """Option that sends zero torques for ``termination_time`` steps."""
+
+    def __init__(self, name: str, env, termination_time: int, action_low: float, action_high: float):
+        super().__init__(name, env)
+        self._termination_time = int(termination_time)
+        self._n_act = int(np.prod(env.action_space.shape))
+        self._zero_action = np.zeros(self._n_act, dtype=np.float32)
+
+    def can_initiate(self, ob, info) -> bool:
+        return True
+
+    def initiate(self, ob, info):
+        super().initiate(ob, info)
+
+    def select_action(self, ob, info):
+        return self._zero_action.copy()
+
+    def is_terminated(self, ob, info) -> bool:
+        return self._step >= self._termination_time
+
+    def reset(self):
+        super().reset()
+
+
 class HierarchicalAntMazeDQNAgent(HierarchicalAgent):
     """Epsilon-greedy DQN over a fixed list of ``MoveInDirectionOption`` instances."""
 

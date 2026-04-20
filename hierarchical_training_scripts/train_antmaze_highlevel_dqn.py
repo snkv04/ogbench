@@ -26,6 +26,7 @@ from torch.nn.utils import clip_grad_norm_
 from hierarchical_training_scripts.hierarchical_antmaze_dqn_agent import (
     HierarchicalAntMazeDQNAgent,
     MoveInDirectionOption,
+    NoOpOption,
 )
 from hierarchical_training_scripts.hierarchical_dqn_agent import QNetwork
 from hierarchical_training_scripts.train_antmaze_lowlevel_td3 import run_maze_validation_episodes
@@ -38,6 +39,7 @@ from hierarchical_training_scripts.train_cube_hrl_dqn import (
 )
 from hierarchical_training_scripts.train_cube_lowlevel_td3 import Actor
 from ogbench.locomaze.maze import make_maze_env
+from ogbench.manipspace.oracles.hierarchical.option import Option
 
 torch.set_float32_matmul_precision("high")
 
@@ -167,7 +169,7 @@ def build_move_options(
     checkpoint_paths: List[str],
     names: List[str],
     args: Args,
-) -> List[MoveInDirectionOption]:
+) -> List[Option]:
     n_act = int(np.prod(env.action_space.shape))
     base_dim = int(np.prod(env.observation_space.shape))
     prefix_dim = 2 if args.concatenate_only_xy else base_dim
@@ -175,7 +177,14 @@ def build_move_options(
     action_low = float(env.action_space.low[0])
     action_high = float(env.action_space.high[0])
 
-    options: List[MoveInDirectionOption] = []
+    no_op = NoOpOption(
+        name="no_op",
+        env=env,
+        termination_time=args.termination_time,
+        action_low=action_low,
+        action_high=action_high,
+    )
+    options: List[Option] = [no_op]
     for name, ckpt in zip(names, checkpoint_paths):
         if not ckpt:
             raise ValueError(f"Missing checkpoint path for option '{name}'")
@@ -261,8 +270,8 @@ if __name__ == "__main__":
 
     ckpt_names = ["up", "down", "left", "right"]
     ckpt_paths = [args.checkpoint_up, args.checkpoint_down, args.checkpoint_left, args.checkpoint_right]
-    num_options = 4
     options = build_move_options(env, device, ckpt_paths, ckpt_names, args)
+    num_options = len(options)  # 5: noop + up + down + left + right
 
     base_obs_dim = int(np.prod(env.observation_space.shape))
     hl_obs_dim = base_obs_dim
