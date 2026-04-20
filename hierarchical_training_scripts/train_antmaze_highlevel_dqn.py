@@ -56,6 +56,8 @@ class Args:
     max_episode_steps: int = 1000
     add_noise_to_init: bool = False
     add_noise_to_goal: bool = False
+    reward_task_id: int = 0
+    """Fixed task ID for MazeEnv. 0 uses the maze-type default task; positive int selects that task (1-indexed)."""
     concatenate_only_xy: bool = True
 
     checkpoint_up: str = ""
@@ -150,6 +152,7 @@ def make_antmaze_hrl_env(args: Args) -> gym.Env:
         terminate_at_goal=False,
         add_noise_to_init=args.add_noise_to_init,
         add_noise_to_goal=args.add_noise_to_goal,
+        reward_task_id=args.reward_task_id,
     )
     base_env = AntMazeHLRewardWrapper(base_env, reward_type=args.reward_type)
     return gym.wrappers.TimeLimit(base_env, max_episode_steps=args.max_episode_steps)
@@ -190,6 +193,14 @@ def build_move_options(
         opt.load_actor_weights()
         options.append(opt)
     return options
+
+
+def _log_maze_reset(env: gym.Env, tag: str = "") -> None:
+    unwrapped = env.unwrapped
+    init_xy = unwrapped.get_xy()
+    goal_xy = unwrapped.cur_goal_xy
+    prefix = f"[{tag}] " if tag else ""
+    logging.info(f"{prefix}init_xy={init_xy}  goal_xy={goal_xy}")
 
 
 def placeholder_noop_configure_env_for_hrl() -> None:
@@ -304,6 +315,7 @@ if __name__ == "__main__":
         logging.info(f"Resuming from global_step={start_global_step}")
 
     ob, info = env.reset(seed=args.seed)
+    _log_maze_reset(env, tag="initial reset")
     agent = HierarchicalAntMazeDQNAgent(env, q_network, device, options=options)
     agent.reset(ob, info)
     assert len(agent._options) == num_options
@@ -407,6 +419,7 @@ if __name__ == "__main__":
             episode_had_completion = False
 
             ob, info = env.reset()
+            _log_maze_reset(env, tag=f"episode reset step={global_step}")
             agent.reset(ob, info)
         else:
             current_hl_info["done"] = False
@@ -511,6 +524,7 @@ if __name__ == "__main__":
                 )
 
             ob, info = env.reset()
+            _log_maze_reset(env, tag=f"post-validation reset step={global_step}")
             agent.reset(ob, info)
             episode_return = 0.0
             episode_step_count = 0

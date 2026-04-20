@@ -312,7 +312,11 @@ def make_maze_env(loco_env_type, maze_env_type, *args, **kwargs):
             # `tasks` is a list of tasks, where each task is a list of two tuples: (init_ij, goal_ij).
             if self._maze_type == 'arena':
                 tasks = [
-                    [(1, 1), (6, 6)],
+                    [(3, 3), (4, 4)],  # distance = (1, 1)
+                    [(2, 2), (4, 4)],  # distance = (2, 2)
+                    [(2, 2), (5, 5)],  # distance = (3, 3)
+                    [(1, 1), (5, 5)],  # distance = (4, 4)
+                    [(1, 1), (6, 6)],  # distance = (5, 5)
                 ]
             elif self._maze_type == 'medium':
                 tasks = [
