@@ -91,6 +91,8 @@ class Args:
 
     reward_type: str = "sparse"
     """reward type: 'sparse' (binary success signal from MazeEnv), 'dense' (negative euclidean distance per timestep), or 'dense_on_options' (zero per-timestep reward; option transition reward is dense reward at the last timestep of the option)"""
+    discount_inside_option: bool = True
+    """If True, rewards within an option are discounted by gamma^t. If False, rewards are summed without discounting."""
 
     save_dir: str = ".ogbench/dqn_antmaze_hl_runs"
     checkpoint_freq: int = 100_000
@@ -369,12 +371,15 @@ if __name__ == "__main__":
         _prof_checkpoint(args, global_step, "select_agent_action")
 
         if agent.was_new_option_selected():
-            # logging.info(f"Selected a new option at global_step={global_step}")
             if current_hl_info is not None:
                 if args.reward_type == "dense_on_options":
                     opt_reward = _dense_reward_from_env(env)
                     current_hl_info["accumulated_reward"] = opt_reward
                     episode_return += opt_reward
+                logging.info(
+                    f"[option done] step={global_step} option={agent._options[current_hl_info['action']].name!r}"
+                    f" length={current_hl_info['option_length']} reward={current_hl_info['accumulated_reward']:.4f}"
+                )
                 rb.add(
                     current_hl_info["obs"].cpu().numpy(),
                     current_hl_info["next_obs"].cpu().numpy(),
@@ -400,7 +405,8 @@ if __name__ == "__main__":
         episode_step_count += 1
 
         # reward will be 0 if using dense_on_options
-        current_hl_info["accumulated_reward"] += (args.gamma ** current_hl_info["option_length"]) * reward
+        discount = (args.gamma ** current_hl_info["option_length"]) if args.discount_inside_option else 1.0
+        current_hl_info["accumulated_reward"] += discount * reward
         current_hl_info["option_length"] += 1
         episode_return += reward
 
@@ -413,6 +419,10 @@ if __name__ == "__main__":
                 current_hl_info["accumulated_reward"] = opt_reward
                 episode_return += opt_reward
             current_hl_info["done"] = True
+            logging.info(
+                f"[option done/ep end] step={global_step} option={agent._options[current_hl_info['action']].name!r}"
+                f" length={current_hl_info['option_length']} reward={current_hl_info['accumulated_reward']:.4f}"
+            )
             rb.add(
                 current_hl_info["obs"].cpu().numpy(),
                 current_hl_info["next_obs"].cpu().numpy(),
