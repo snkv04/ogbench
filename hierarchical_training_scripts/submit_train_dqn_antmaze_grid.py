@@ -59,16 +59,18 @@ DEFAULT_SLURM_ARGS: list[str] = [
 DEFAULT_FIXED_TRAIN_ARGS: list[str] = [
     "--save-first-val-episodes-videos=4",
     "--no-validation-greedy",
-    "--checkpoint-up=/home/svangaru/Desktop/ogbench/.ogbench/td3_runs/antmaze-arena__train_antmaze_lowlevel_td3__1__True__True__2026-04-07_02-05-17/checkpoints/checkpoint_step1950000.pt",
-    "--checkpoint-down=/home/svangaru/Desktop/ogbench/.ogbench/td3_runs/antmaze-arena__train_antmaze_lowlevel_td3__1__True__True__2026-04-07_02-05-47/checkpoints/checkpoint_step1950000.pt",
-    "--checkpoint-left=/home/svangaru/Desktop/ogbench/.ogbench/td3_runs/antmaze-arena__train_antmaze_lowlevel_td3__1__True__True__2026-04-07_02-06-36/checkpoints/checkpoint_step1100000.pt",
-    "--checkpoint-right=/home/svangaru/Desktop/ogbench/.ogbench/td3_runs/antmaze-arena__train_antmaze_lowlevel_td3__1__True__True__2026-04-07_02-06-23/checkpoints/checkpoint_step1950000.pt",
+    "--checkpoint-up=/home/svangaru/Desktop/ogbench/.ogbench/td3_runs/antmaze-arena__train_antmaze_lowlevel_td3__1__True__True__2026-04-08_02-09-40/checkpoints/checkpoint_step1950000.pt",
+    "--checkpoint-down=/home/svangaru/Desktop/ogbench/.ogbench/td3_runs/antmaze-arena__train_antmaze_lowlevel_td3__1__True__True__2026-04-09_00-28-52/checkpoints/checkpoint_step1950000.pt",
+    "--checkpoint-left=/home/svangaru/Desktop/ogbench/.ogbench/td3_runs/antmaze-arena__train_antmaze_lowlevel_td3__1__True__True__2026-04-09_00-28-56/checkpoints/checkpoint_step1950000.pt",
+    "--checkpoint-right=/home/svangaru/Desktop/ogbench/.ogbench/td3_runs/antmaze-arena__train_antmaze_lowlevel_td3__1__True__True__2026-04-10_03-56-57/checkpoints/checkpoint_step1950000.pt",
     "--total-timesteps=2000000",
     "--track-with-wandb",
     "--reward-type=sparse",
     "--run-profiling",
     "--termination-time=50",
     "--max-episode-steps=800",
+    "--reward-task-id=1",
+    "--goal-radius=1.5",
 ]
 
 # Short labels for Slurm job names (%x in log paths); unknown keys get a compact fallback.
@@ -255,9 +257,9 @@ def render_slurm_batch_script(
 
 
 def sbatch_from_stdin(script: str, cwd: Path) -> subprocess.CompletedProcess[str]:
-    """Submit ``script`` via ``sbatch -`` (stdin); avoids writing temporary .sh files on disk."""
+    """Submit ``script`` via sbatch stdin; avoids writing temporary .sh files on disk."""
     return subprocess.run(
-        ["sbatch", "-"],
+        ["sbatch"],
         input=script,
         text=True,
         cwd=os.fspath(cwd),

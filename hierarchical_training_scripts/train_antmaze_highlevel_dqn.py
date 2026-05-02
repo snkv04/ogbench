@@ -94,6 +94,13 @@ class Args:
     discount_inside_option: bool = True
     """If True, rewards within an option are discounted by gamma^t. If False, rewards are summed without discounting."""
 
+    discretize_hl_obs: bool = True
+    """If True, XY dims of the HL observation are replaced with per-axis bins + scalar displacement from bin center."""
+    use_one_hot: bool = False
+    """If True (and discretize_hl_obs=True), encode each axis as a one-hot vector + displacement (2*(num_bins+1) dims). If False, encode as [bin_idx, displacement] per axis (4 dims total)."""
+    num_bins: int = 6
+    """Number of bins per axis when discretize_hl_obs=True."""
+
     save_dir: str = ".ogbench/dqn_antmaze_hl_runs"
     checkpoint_freq: int = 100_000
     save_model: bool = True
@@ -276,8 +283,14 @@ if __name__ == "__main__":
     num_options = len(options)  # 5: noop + up + down + left + right
 
     base_obs_dim = int(np.prod(env.observation_space.shape))
-    hl_obs_dim = base_obs_dim
-    logging.info(f"High-level Q input dim={hl_obs_dim} (same as env observation space)")
+    if args.discretize_hl_obs:
+        xy_enc_dim = 2 * (args.num_bins + 1) if args.use_one_hot else 4
+        hl_obs_dim = xy_enc_dim + (base_obs_dim - 2)
+        mode = f"one-hot ({args.num_bins} bins/axis + displacement)" if args.use_one_hot else "bin-idx + displacement (4 dims)"
+        logging.info(f"High-level Q input dim={hl_obs_dim} (discretized XY: {mode})")
+    else:
+        hl_obs_dim = base_obs_dim
+        logging.info(f"High-level Q input dim={hl_obs_dim} (same as env observation space)")
 
     q_network = QNetwork(hl_obs_dim, num_options, hidden_dim=args.q_hidden_dim).to(device)
     target_network = QNetwork(hl_obs_dim, num_options, hidden_dim=args.q_hidden_dim).to(device)
@@ -330,7 +343,27 @@ if __name__ == "__main__":
 
     ob, info = env.reset(seed=args.seed)
     _log_maze_reset(env, tag="initial reset")
-    agent = HierarchicalAntMazeDQNAgent(env, q_network, device, options=options)
+    unwrapped = env.unwrapped
+    half_cell = unwrapped._maze_unit / 2
+    nrows, ncols = unwrapped.maze_map.shape
+    xy_low = np.array([
+        1 * unwrapped._maze_unit - unwrapped._offset_x - half_cell,
+        1 * unwrapped._maze_unit - unwrapped._offset_y - half_cell,
+    ], dtype=np.float32)
+    xy_high = np.array([
+        (ncols - 2) * unwrapped._maze_unit - unwrapped._offset_x + half_cell,
+        (nrows - 2) * unwrapped._maze_unit - unwrapped._offset_y + half_cell,
+    ], dtype=np.float32)
+    logging.info(f"Maze XY bounds: low={xy_low} high={xy_high}")
+
+    agent = HierarchicalAntMazeDQNAgent(
+        env, q_network, device, options=options,
+        discretize_hl_obs=args.discretize_hl_obs,
+        num_bins=args.num_bins,
+        use_one_hot=args.use_one_hot,
+        xy_low=xy_low,
+        xy_high=xy_high,
+    )
     agent.reset(ob, info)
     assert len(agent._options) == num_options
 
@@ -376,10 +409,10 @@ if __name__ == "__main__":
                     opt_reward = _dense_reward_from_env(env)
                     current_hl_info["accumulated_reward"] = opt_reward
                     episode_return += opt_reward
-                logging.info(
-                    f"[option done] step={global_step} option={agent._options[current_hl_info['action']].name!r}"
-                    f" length={current_hl_info['option_length']} reward={current_hl_info['accumulated_reward']:.4f}"
-                )
+                # logging.info(
+                #     f"[option done] step={global_step} option={agent._options[current_hl_info['action']].name!r}"
+                #     f" length={current_hl_info['option_length']} reward={current_hl_info['accumulated_reward']:.4f}"
+                # )
                 rb.add(
                     current_hl_info["obs"].cpu().numpy(),
                     current_hl_info["next_obs"].cpu().numpy(),
@@ -419,10 +452,10 @@ if __name__ == "__main__":
                 current_hl_info["accumulated_reward"] = opt_reward
                 episode_return += opt_reward
             current_hl_info["done"] = True
-            logging.info(
-                f"[option done/ep end] step={global_step} option={agent._options[current_hl_info['action']].name!r}"
-                f" length={current_hl_info['option_length']} reward={current_hl_info['accumulated_reward']:.4f}"
-            )
+            # logging.info(
+            #     f"[option done/ep end] step={global_step} option={agent._options[current_hl_info['action']].name!r}"
+            #     f" length={current_hl_info['option_length']} reward={current_hl_info['accumulated_reward']:.4f}"
+            # )
             rb.add(
                 current_hl_info["obs"].cpu().numpy(),
                 current_hl_info["next_obs"].cpu().numpy(),

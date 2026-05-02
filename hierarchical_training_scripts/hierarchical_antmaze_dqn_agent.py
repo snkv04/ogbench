@@ -134,24 +134,68 @@ class HierarchicalAntMazeDQNAgent(HierarchicalAgent):
         q_network: QNetwork,
         device: torch.device,
         options: List[MoveInDirectionOption],
+        discretize_hl_obs: bool = True,
+        num_bins: int = 10,
+        use_one_hot: bool = True,
+        xy_low: np.ndarray | None = None,
+        xy_high: np.ndarray | None = None,
     ):
         super().__init__(options=options, env=env, min_norm=0.08)
         self.q_network = q_network
         self.device = device
         self.epsilon = 0.0
         self._base_obs_dim = int(np.prod(env.observation_space.shape))
+        self._discretize_hl_obs = discretize_hl_obs
+        self._num_bins = num_bins
+        self._use_one_hot = use_one_hot
+        self._xy_low = np.asarray(xy_low, dtype=np.float32)
+        self._xy_high = np.asarray(xy_high, dtype=np.float32)
+        self._bins_logged = False
 
     def reset(self, ob, info):
         super().reset(ob, info)
 
+    def _discretize_xy(self, xy: np.ndarray) -> np.ndarray:
+        """Replace each XY scalar with a one-hot bin vector + scalar displacement from bin center."""
+        if not self._bins_logged:
+            for axis, name in enumerate(("x", "y")):
+                lo, hi = self._xy_low[axis], self._xy_high[axis]
+                bin_width = (hi - lo) / self._num_bins
+                thresholds = [lo + i * bin_width for i in range(self._num_bins + 1)]
+                logging.info(
+                    f"[discretize_xy] {name}-axis: low={lo:.3f} high={hi:.3f} "
+                    f"bin_width={bin_width:.3f} thresholds={[f'{t:.2f}' for t in thresholds]}"
+                )
+            self._bins_logged = True
+
+        parts = []
+        for i in range(2):
+            lo, hi = self._xy_low[i], self._xy_high[i]
+            bin_width = (hi - lo) / self._num_bins
+            idx = int(np.clip((xy[i] - lo) / bin_width, 0, self._num_bins - 1))
+            center = lo + (idx + 0.5) * bin_width
+            displacement = (xy[i] - center) / (bin_width / 2.0)
+            if self._use_one_hot:
+                enc = np.zeros(self._num_bins, dtype=np.float32)
+                enc[idx] = 1.0
+            else:
+                enc = np.array([idx], dtype=np.float32)
+            parts.append(enc)
+            parts.append(np.array([displacement], dtype=np.float32))
+        return np.concatenate(parts)
+
     def get_obs_tensor(self, ob: np.ndarray, info=None) -> torch.Tensor:
-        """High-level Q input: same vector the env returns (e.g. shape (29,)) at option boundaries."""
+        """High-level Q input: raw env obs, or discretized XY + rest if discretize_hl_obs=True."""
         ob = np.asarray(ob, dtype=np.float32).ravel()
         if ob.shape[0] != self._base_obs_dim:
             raise ValueError(
                 f"get_obs_tensor: expected env obs dim {self._base_obs_dim}, got {ob.shape[0]}"
             )
-        return torch.as_tensor(ob, dtype=torch.float32, device=self.device)
+        if self._discretize_hl_obs:
+            obs = np.concatenate([self._discretize_xy(ob[:2]), ob[2:]])
+        else:
+            obs = ob
+        return torch.as_tensor(obs, dtype=torch.float32, device=self.device)
 
     def select_high_level_action(self, ob, info):
         obs = self.get_obs_tensor(ob, info).unsqueeze(0)
