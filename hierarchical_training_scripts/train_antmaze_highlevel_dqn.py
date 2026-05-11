@@ -94,8 +94,10 @@ class Args:
     """reward type: 'sparse' (binary success signal from MazeEnv), 'dense' (negative euclidean distance per timestep), or 'dense_on_options' (zero per-timestep reward; option transition reward is dense reward at the last timestep of the option)"""
     discount_inside_option: bool = True
     """If True, rewards within an option are discounted by gamma^t. If False, rewards are summed without discounting."""
+    options_one_step: bool = False
+    """If True, bootstrap with gamma^1 (treat each option as a single macro-step). If False, bootstrap with gamma^option_length (proper SMDP discount)."""
 
-    discretize_hl_obs: bool = True
+    discretize_hl_obs: bool = False
     """If True, XY dims of the HL observation are replaced with per-axis bins + scalar displacement from bin center."""
     use_one_hot: bool = False
     """If True (and discretize_hl_obs=True), encode each axis as a one-hot vector + displacement (2*(num_bins+1) dims). If False, encode as [bin_idx, displacement] per axis (4 dims total)."""
@@ -295,6 +297,7 @@ def train_one_seed(
         device,
         handle_timeout_termination=False,
     )
+    option_lengths_buf = np.zeros(args.buffer_size, dtype=np.int32)
 
     start_global_step = 0
     episode_returns = deque(maxlen=args.episode_window_size)
@@ -408,6 +411,7 @@ def train_one_seed(
                     np.array([current_hl_info["done"]]),
                     [{}],
                 )
+                option_lengths_buf[(rb.pos - 1) % args.buffer_size] = current_hl_info["option_length"]
             obs, action = agent.get_last_transition_info()
             current_hl_info = {
                 "obs": obs,
@@ -451,6 +455,7 @@ def train_one_seed(
                 np.array([current_hl_info["done"]]),
                 [{}],
             )
+            option_lengths_buf[(rb.pos - 1) % args.buffer_size] = current_hl_info["option_length"]
             current_hl_info = None
 
             episode_returns.append(episode_return)
@@ -470,11 +475,18 @@ def train_one_seed(
 
         if global_step >= args.learning_starts:
             if global_step % args.train_frequency == 0:
-                data = rb.sample(args.batch_size)
+                batch_inds = np.random.randint(0, rb.buffer_size if rb.full else rb.pos, size=args.batch_size)
+                data = rb._get_samples(batch_inds)
                 with torch.no_grad():
                     target_max, _ = target_network(data.next_observations).max(dim=1)
-                    td_target = data.rewards.flatten() + args.gamma * target_max
-                old_val = q_network(data.observations).gather(1, data.actions).squeeze()
+                    if args.options_one_step:
+                        gamma_k = args.gamma
+                    else:
+                        opt_lens = torch.tensor(option_lengths_buf[batch_inds], device=device, dtype=torch.float32)
+                        gamma_k = args.gamma ** opt_lens
+                    # Intentionally ignores the done flag to capture the infinite horizon
+                    td_target = data.rewards.flatten() + gamma_k * target_max
+                old_val = q_network(data.observations).gather(1, data.actions).squeeze(1)
                 loss = F.mse_loss(td_target, old_val)
                 last_loss = loss.detach()
                 optimizer.zero_grad()
@@ -641,6 +653,7 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
     logging.info(f"Using device: {device}")
     logging.info(f"Running {len(args.seeds)} seed(s): {args.seeds}")
+    logging.info(f"Args:\n{json.dumps(vars(args), indent=2)}")
 
     # Runs each seed
     for seed in args.seeds:
