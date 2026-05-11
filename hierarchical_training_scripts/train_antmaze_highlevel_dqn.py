@@ -78,7 +78,7 @@ class Args:
     episode_window_size: int = 100
 
     buffer_size: int = 100_000
-    gamma: float = 0.98
+    gamma: float = 0.99
     tau: float = 1.0
     target_network_frequency: int = 1000
     batch_size: int = 128

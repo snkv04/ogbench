@@ -43,9 +43,11 @@ from typing import Any, Mapping
 
 DEFAULT_REPO_ROOT = Path(__file__).resolve().parents[1]
 
-DEFAULT_NODELISTS: list[str] = [
-    f"smblade16b{i}" for i in range(1, 9)
-]
+DEFAULT_NODELISTS: list[str] = (
+    [f"smblade24a{i}" for i in range(1, 7)] +
+    [f"smblade16b{i}" for i in range(1, 9)] +
+    [f"smblade16a{i}" for i in range(1, 15)]
+)
 
 DEFAULT_SLURM_ARGS: list[str] = [
     "#!/bin/bash",
@@ -59,18 +61,16 @@ DEFAULT_SLURM_ARGS: list[str] = [
 DEFAULT_FIXED_TRAIN_ARGS: list[str] = [
     "--save-first-val-episodes-videos=4",
     "--no-validation-greedy",
-    "--checkpoint-up=/home/svangaru/Desktop/ogbench/.ogbench/td3_runs/antmaze-arena__train_antmaze_lowlevel_td3__1__True__True__2026-04-08_02-09-40/checkpoints/checkpoint_step1950000.pt",
-    "--checkpoint-down=/home/svangaru/Desktop/ogbench/.ogbench/td3_runs/antmaze-arena__train_antmaze_lowlevel_td3__1__True__True__2026-04-09_00-28-52/checkpoints/checkpoint_step1950000.pt",
-    "--checkpoint-left=/home/svangaru/Desktop/ogbench/.ogbench/td3_runs/antmaze-arena__train_antmaze_lowlevel_td3__1__True__True__2026-04-09_00-28-56/checkpoints/checkpoint_step1950000.pt",
-    "--checkpoint-right=/home/svangaru/Desktop/ogbench/.ogbench/td3_runs/antmaze-arena__train_antmaze_lowlevel_td3__1__True__True__2026-04-10_03-56-57/checkpoints/checkpoint_step1950000.pt",
+    "--checkpoint-up=/home/svangaru/Desktop/ogbench/.ogbench/td3_runs/antmaze-arena__train_antmaze_lowlevel_td3__1__True__True__2026-04-07_02-05-17/checkpoints/checkpoint_step1950000.pt",
+    "--checkpoint-down=/home/svangaru/Desktop/ogbench/.ogbench/td3_runs/antmaze-arena__train_antmaze_lowlevel_td3__1__True__True__2026-04-07_02-05-47/checkpoints/checkpoint_step1950000.pt",
+    "--checkpoint-left=/home/svangaru/Desktop/ogbench/.ogbench/td3_runs/antmaze-arena__train_antmaze_lowlevel_td3__1__True__True__2026-04-07_02-06-36/checkpoints/checkpoint_step1100000.pt",
+    "--checkpoint-right=/home/svangaru/Desktop/ogbench/.ogbench/td3_runs/antmaze-arena__train_antmaze_lowlevel_td3__1__True__True__2026-04-07_02-06-23/checkpoints/checkpoint_step1950000.pt",
+    "--termination-time=50",
+    "--max-episode-steps=2000",
     "--total-timesteps=2000000",
     "--track-with-wandb",
     "--reward-type=sparse",
     "--run-profiling",
-    "--termination-time=50",
-    "--max-episode-steps=800",
-    "--reward-task-id=1",
-    "--goal-radius=1.5",
 ]
 
 # Short labels for Slurm job names (%x in log paths); unknown keys get a compact fallback.
@@ -215,9 +215,20 @@ def grid_job_name_from_combo(combo: dict[str, Any], *, prefix: str = "train_dqn_
     return name if len(name) <= max_len else name[:max_len]
 
 
+def run_name_from_combo(combo: dict[str, Any]) -> str:
+    """Build a --run-name value encoding every searched hyperparameter."""
+    parts = []
+    for k in sorted(combo.keys()):
+        key_slug = k.replace("-", "")
+        val_slug = str(combo[k]).replace(".", "p")
+        parts.append(f"{key_slug}{val_slug}")
+    return "_".join(parts)
+
+
 def build_train_argv(fixed_args: list[str], combo: dict[str, Any], extra_train_args: list[str]) -> list[str]:
     """Full argv for ``python -m ... train_antmaze_highlevel_dqn``."""
-    return fixed_args + combo_to_train_argv(combo) + extra_train_args
+    run_name_arg = f"--run-name={run_name_from_combo(combo)}" if combo else ""
+    return fixed_args + combo_to_train_argv(combo) + ([run_name_arg] if run_name_arg else []) + extra_train_args
 
 
 def format_bash_python_invocation(train_args: list[str]) -> list[str]:
