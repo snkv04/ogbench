@@ -8,7 +8,7 @@ import os
 import random
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Optional
 
@@ -46,7 +46,8 @@ torch.set_float32_matmul_precision("high")
 
 @dataclass
 class Args:
-    seed: int = 1
+    seeds: List[int] = field(default_factory=lambda: list(range(42, 47)))
+    """List of random seeds to run sequentially. Each seed is a separate WandB run under the same group."""
     torch_deterministic: bool = True
     cuda: bool = True
     track_with_wandb: bool = False
@@ -229,25 +230,17 @@ def placeholder_noop_configure_env_for_hrl() -> None:
     return
 
 
-if __name__ == "__main__":
-    import stable_baselines3 as sb3
-
-    if sb3.__version__ < "2.0":
-        raise ValueError(
-            'Install stable_baselines3>=2.0, e.g. poetry run pip install "stable_baselines3==2.0.0a1"'
-        )
-
-    args = tyro.cli(Args)
-    num_episodes = args.total_timesteps // args.max_episode_steps
-    if args.total_timesteps % args.max_episode_steps != 0:
-        logging.warning(
-            f"total_timesteps ({args.total_timesteps}) is not divisible by max_episode_steps ({args.max_episode_steps}); "
-            f"training for {num_episodes * args.max_episode_steps} env steps instead."
-        )
-        args.total_timesteps = num_episodes * args.max_episode_steps
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_name = f"{args.run_name}__{timestamp}" if args.run_name else f"antmaze_hl__{args.maze_type}__{args.seed}__{timestamp}"
+def train_one_seed(
+    seed: int,
+    args: Args,
+    device: torch.device,
+    run_name: str,
+    save_path: str
+) -> None:
+    seed_save_path = os.path.join(save_path, f"seed_{seed}") if len(args.seeds) > 1 else save_path
+    os.makedirs(seed_save_path, exist_ok=True)
+    seed_run_name = f"{run_name}_seed{seed}" if len(args.seeds) > 1 else run_name
+    logging.info(f"Starting seed={seed}")
 
     if args.track_with_wandb:
         import wandb
@@ -255,26 +248,20 @@ if __name__ == "__main__":
         wandb.init(
             project=args.wandb_project_name,
             entity=args.wandb_entity,
-            name=run_name,
-            config=vars(args),
+            name=seed_run_name,
+            group=run_name,
+            config={**vars(args), "seed": seed},
             save_code=True,
             dir=".ogbench/wandb",
         )
 
-    save_path = os.path.join(args.save_dir, run_name)
-    os.makedirs(save_path, exist_ok=True)
-    logging.info(f"Saving to: {save_path}")
-
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
-    device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
-    logging.info(f"Using device: {device}")
-
     env = make_antmaze_hrl_env(args)
-    env.action_space.seed(args.seed)
+    env.action_space.seed(seed)
     placeholder_noop_configure_env_for_hrl()
 
     ckpt_names = ["up", "down", "left", "right"]
@@ -341,7 +328,7 @@ if __name__ == "__main__":
             training_metrics = checkpoint["training_metrics"]
         logging.info(f"Resuming from global_step={start_global_step}")
 
-    ob, info = env.reset(seed=args.seed)
+    ob, info = env.reset(seed=seed)
     _log_maze_reset(env, tag="initial reset")
     unwrapped = env.unwrapped
     half_cell = unwrapped._maze_unit / 2
@@ -526,7 +513,7 @@ if __name__ == "__main__":
         _prof_checkpoint(args, global_step, "log_to_wandb")
 
         if args.save_model and global_step % args.checkpoint_freq == 0 and global_step >= args.learning_starts:
-            checkpoint_path = os.path.join(save_path, f"checkpoint_step{global_step}.pt")
+            checkpoint_path = os.path.join(seed_save_path, f"checkpoint_step{global_step}.pt")
             save_checkpoint(
                 global_step=global_step,
                 q_network=q_network,
@@ -554,7 +541,7 @@ if __name__ == "__main__":
                 agent=agent,
                 num_episodes=10,
                 num_episode_videos=args.save_first_val_episodes_videos,
-                save_dir=save_path,
+                save_dir=seed_save_path,
                 video_prefix=f"validation_step{global_step}",
             )
             q_network.train()
@@ -589,10 +576,10 @@ if __name__ == "__main__":
 
     if args.run_profiling:
         _save_profiling_json(
-            args.profiling_dict, save_path, args.profiling_start, args.total_timesteps, "DQN_antmaze_hl"
+            args.profiling_dict, seed_save_path, args.profiling_start, args.total_timesteps, "DQN_antmaze_hl"
         )
         _save_profiling_bar_graph(
-            args.profiling_dict, save_path, args.profiling_start, args.total_timesteps, "DQN_antmaze_hl"
+            args.profiling_dict, seed_save_path, args.profiling_start, args.total_timesteps, "DQN_antmaze_hl"
         )
 
     env.close()
@@ -602,7 +589,7 @@ if __name__ == "__main__":
         wandb.finish()
 
     if args.save_model:
-        final_model_path = os.path.join(save_path, f"final_model_step{global_step}.pt")
+        final_model_path = os.path.join(seed_save_path, f"final_model_step{global_step}.pt")
         save_checkpoint(
             global_step=global_step,
             q_network=q_network,
@@ -617,9 +604,46 @@ if __name__ == "__main__":
         )
         logging.info(f"Final model saved to {final_model_path}")
 
-    metrics_path = os.path.join(save_path, f"training_metrics_step{global_step}.json")
+    metrics_path = os.path.join(seed_save_path, f"training_metrics_step{global_step}.json")
     with open(metrics_path, "w") as f:
         json.dump(training_metrics, f, indent=2)
     logging.info(f"Saved training metrics to {metrics_path}")
+
+
+if __name__ == "__main__":
+    # Imports sb3 dependency
+    import stable_baselines3 as sb3
+    if sb3.__version__ < "2.0":
+        raise ValueError(
+            'Install stable_baselines3>=2.0, e.g. poetry run pip install "stable_baselines3==2.0.0a1"'
+        )
+
+    # Processes args
+    args = tyro.cli(Args)
+    num_episodes = args.total_timesteps // args.max_episode_steps
+    if args.total_timesteps % args.max_episode_steps != 0:
+        logging.warning(
+            f"total_timesteps ({args.total_timesteps}) is not divisible by max_episode_steps ({args.max_episode_steps}); "
+            f"training for {num_episodes * args.max_episode_steps} env steps instead."
+        )
+        args.total_timesteps = num_episodes * args.max_episode_steps
+
+    # Makes run name
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_name = f"{args.run_name}__{timestamp}" if args.run_name else f"antmaze_hl__{args.maze_type}__{timestamp}"
+
+    # Makes save path from run name
+    save_path = os.path.join(args.save_dir, run_name)
+    os.makedirs(save_path, exist_ok=True)
+    logging.info(f"Saving to: {save_path}")
+
+    # Gets device
+    device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
+    logging.info(f"Using device: {device}")
+    logging.info(f"Running {len(args.seeds)} seed(s): {args.seeds}")
+
+    # Runs each seed
+    for seed in args.seeds:
+        train_one_seed(seed, args, device, run_name, save_path)
 
     logging.info("Training complete.")
