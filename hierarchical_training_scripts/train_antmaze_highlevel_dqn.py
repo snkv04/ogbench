@@ -7,6 +7,7 @@ import os
 
 import random
 import time
+from abc import ABC, abstractmethod
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -104,6 +105,17 @@ class Args:
     num_bins: int = 6
     """Number of bins per axis when discretize_hl_obs=True."""
 
+    count_bonus_beta: float = 0.0
+    """Intrinsic exploration bonus scale (beta / sqrt(N(s))). 0 disables count-based exploration."""
+    count_bonus_anneal: bool = False
+    """If True, linearly decay count_bonus_beta to 0 over training."""
+    count_method: str = "grid"
+    """Count-based exploration method: 'grid' or 'simhash'."""
+    count_grid_n_cells: int = 12
+    """Grid cells per axis for grid-based count exploration (count_method='grid')."""
+    simhash_bits: int = 16
+    """Hash bits k for SimHash (count_method='simhash'). Yields at most 2k distinct sectors if only hashing XY."""
+
     save_dir: str = ".ogbench/dqn_antmaze_hl_runs"
     checkpoint_freq: int = 100_000
     save_model: bool = True
@@ -121,6 +133,114 @@ class Args:
 def linear_schedule(start_e: float, end_e: float, duration: int, t: int) -> float:
     slope = (end_e - start_e) / duration
     return max(slope * t + start_e, end_e)
+
+
+class CountExplorer(ABC):
+    @abstractmethod
+    def intrinsic_bonus(self, obs: np.ndarray, beta: float) -> float: ...
+
+    @abstractmethod
+    def increment(self, obs: np.ndarray) -> None: ...
+
+    @property
+    @abstractmethod
+    def cells_visited(self) -> int: ...
+
+    @abstractmethod
+    def save_state(self, path: str) -> None: ...
+
+    @abstractmethod
+    def load_state(self, path: str) -> None: ...
+
+
+class GridVisitCounter(CountExplorer):
+    def __init__(self, xy_low: np.ndarray, xy_high: np.ndarray, n_cells: int):
+        self._xy_low = xy_low
+        self._xy_high = xy_high
+        self._n = n_cells
+        self.counts = np.zeros((n_cells, n_cells), dtype=np.int64)
+
+    def _to_cell(self, obs: np.ndarray) -> tuple[int, int]:
+        frac = (obs[:2] - self._xy_low) / (self._xy_high - self._xy_low)
+        i = int(np.clip(frac[0] * self._n, 0, self._n - 1))
+        j = int(np.clip(frac[1] * self._n, 0, self._n - 1))
+        return i, j
+
+    def intrinsic_bonus(self, obs: np.ndarray, beta: float) -> float:
+        i, j = self._to_cell(obs)
+        return beta / np.sqrt(self.counts[i, j])
+
+    def increment(self, obs: np.ndarray) -> None:
+        i, j = self._to_cell(obs)
+        self.counts[i, j] += 1
+
+    @property
+    def cells_visited(self) -> int:
+        return int(np.sum(self.counts > 0))
+
+    def save_state(self, path: str) -> None:
+        np.save(path, self.counts)  # numpy appends .npy
+
+    def load_state(self, path: str) -> None:
+        self.counts = np.load(path + ".npy")
+
+
+class SimHashVisitCounter(CountExplorer):
+    """Locality-sensitive hash over XY coords: sign(A @ normalized_xy), k bits."""
+
+    def __init__(self, xy_low: np.ndarray, xy_high: np.ndarray, k: int, seed: int = 0):
+        self._xy_low = xy_low
+        self._xy_high = xy_high
+        self._k = k
+        rng = np.random.RandomState(seed)
+        self._A = rng.randn(k, 2).astype(np.float32)
+        self._counts: dict[int, int] = {}
+
+    def _hash(self, obs: np.ndarray) -> int:
+        obs_xy = obs[:2]
+        norm = (obs_xy - self._xy_low) / (self._xy_high - self._xy_low) * 2.0 - 1.0
+        bits = (self._A @ norm) >= 0
+        packed = np.packbits(bits, bitorder="big")
+        return int.from_bytes(packed.tobytes(), "big")
+
+    def intrinsic_bonus(self, obs: np.ndarray, beta: float) -> float:
+        return beta / np.sqrt(max(self._counts.get(self._hash(obs), 0), 1))
+
+    def increment(self, obs: np.ndarray) -> None:
+        code = self._hash(obs)
+        self._counts[code] = self._counts.get(code, 0) + 1
+
+    @property
+    def cells_visited(self) -> int:
+        return len(self._counts)
+
+    def save_state(self, path: str) -> None:
+        keys = np.array(list(self._counts.keys()), dtype=np.int64)
+        vals = np.array(list(self._counts.values()), dtype=np.int64)
+        np.savez(path, A=self._A, counts_keys=keys, counts_vals=vals)  # numpy appends .npz
+
+    def load_state(self, path: str) -> None:
+        data = np.load(path + ".npz")
+        self._A = data["A"]
+        self._counts = dict(zip(data["counts_keys"].tolist(), data["counts_vals"].tolist()))
+
+
+def _effective_count_beta(args: Args, global_step: int) -> float:
+    if args.count_bonus_anneal:
+        return args.count_bonus_beta * (1.0 - global_step / args.total_timesteps)
+    return args.count_bonus_beta
+
+
+def _count_state_path(checkpoint_path: str) -> str:
+    return checkpoint_path + ".count_state"
+
+
+def make_count_explorer(args: Args, xy_low: np.ndarray, xy_high: np.ndarray) -> CountExplorer:
+    if args.count_method == "grid":
+        return GridVisitCounter(xy_low, xy_high, args.count_grid_n_cells)
+    if args.count_method == "simhash":
+        return SimHashVisitCounter(xy_low, xy_high, args.simhash_bits)
+    raise ValueError(f"Unknown count_method: {args.count_method!r}")
 
 
 def maze_task_done(env: gym.Env, info: dict) -> bool:
@@ -346,6 +466,20 @@ def train_one_seed(
     ], dtype=np.float32)
     logging.info(f"Maze XY bounds: low={xy_low} high={xy_high}")
 
+    count_explorer: Optional[CountExplorer] = (
+        make_count_explorer(args, xy_low, xy_high) if args.count_bonus_beta > 0 else None
+    )
+    if count_explorer is not None:
+        logging.info(
+            f"Count-based exploration enabled: method={args.count_method!r} beta={args.count_bonus_beta}"
+            f" anneal={args.count_bonus_anneal}"
+        )
+        if args.load_path:
+            count_state_path = _count_state_path(args.load_path)
+            if os.path.exists(count_state_path):
+                count_explorer.load_state(count_state_path)
+                logging.info(f"Loaded count state from {count_state_path}")
+
     agent = HierarchicalAntMazeDQNAgent(
         env, q_network, device, options=options,
         discretize_hl_obs=args.discretize_hl_obs,
@@ -364,6 +498,7 @@ def train_one_seed(
     episode_had_completion = False
     current_hl_info = None
     last_loss = torch.tensor(0.0, device=device)
+    last_bonus = 0.0
 
     pbar = tqdm.tqdm(range(start_global_step, start_global_step + args.total_timesteps))
     for global_step in pbar:
@@ -399,6 +534,10 @@ def train_one_seed(
                     opt_reward = _dense_reward_from_env(env)
                     current_hl_info["accumulated_reward"] = opt_reward
                     episode_return += opt_reward
+                if count_explorer is not None:
+                    count_explorer.increment(ob)
+                    last_bonus = count_explorer.intrinsic_bonus(ob, _effective_count_beta(args, global_step))
+                    current_hl_info["accumulated_reward"] += last_bonus
                 # logging.info(
                 #     f"[option done] step={global_step} option={agent._options[current_hl_info['action']].name!r}"
                 #     f" length={current_hl_info['option_length']} reward={current_hl_info['accumulated_reward']:.4f}"
@@ -443,6 +582,10 @@ def train_one_seed(
                 current_hl_info["accumulated_reward"] = opt_reward
                 episode_return += opt_reward
             current_hl_info["done"] = True
+            if count_explorer is not None:
+                count_explorer.increment(next_ob)
+                last_bonus = count_explorer.intrinsic_bonus(next_ob, _effective_count_beta(args, global_step))
+                current_hl_info["accumulated_reward"] += last_bonus
             # logging.info(
             #     f"[option done/ep end] step={global_step} option={agent._options[current_hl_info['action']].name!r}"
             #     f" length={current_hl_info['option_length']} reward={current_hl_info['accumulated_reward']:.4f}"
@@ -517,6 +660,9 @@ def train_one_seed(
             }
             if global_step >= args.learning_starts:
                 metrics["train/loss"] = float(last_loss.item())
+            if count_explorer is not None:
+                metrics["train/count_bonus"] = float(last_bonus)
+                metrics["train/count_cells_visited"] = count_explorer.cells_visited
             training_metrics.append(metrics)
             if args.track_with_wandb:
                 import wandb
@@ -538,6 +684,8 @@ def train_one_seed(
                 training_metrics=training_metrics,
                 save_path=checkpoint_path,
             )
+            if count_explorer is not None:
+                count_explorer.save_state(_count_state_path(checkpoint_path))
             _prof_checkpoint(args, global_step, "save_checkpoint")
 
             logging.info(
@@ -614,6 +762,8 @@ def train_one_seed(
             training_metrics=training_metrics,
             save_path=final_model_path,
         )
+        if count_explorer is not None:
+            count_explorer.save_state(_count_state_path(final_model_path))
         logging.info(f"Final model saved to {final_model_path}")
 
     metrics_path = os.path.join(seed_save_path, f"training_metrics_step{global_step}.json")

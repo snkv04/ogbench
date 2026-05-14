@@ -44,9 +44,7 @@ from typing import Any, Mapping
 DEFAULT_REPO_ROOT = Path(__file__).resolve().parents[1]
 
 DEFAULT_NODELISTS: list[str] = (
-    [f"smblade24a{i}" for i in range(1, 7)] +
-    [f"smblade16b{i}" for i in range(1, 9)] +
-    [f"smblade16a{i}" for i in range(1, 15)]
+    [f"smblade16b{i}" for i in range(1, 9)]
 )
 
 DEFAULT_SLURM_ARGS: list[str] = [
@@ -71,6 +69,8 @@ DEFAULT_FIXED_TRAIN_ARGS: list[str] = [
     "--track-with-wandb",
     "--reward-type=sparse",
     "--run-profiling",
+    "--reward-task-id=3",
+    "--goal-radius=1.5",
 ]
 
 # Short labels for Slurm job names (%x in log paths); unknown keys get a compact fallback.
@@ -81,6 +81,9 @@ _OPTION_ABBREV: dict[str, str] = {
     "learning-rate": "lr",
     "reward-task-id": "rtid",
     "goal-radius": "gr",
+    "count-grid-n-cells": "ncells",
+    "simhash-bits": "shb",
+    "beta": "beta",
 }
 
 
