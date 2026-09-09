@@ -47,7 +47,7 @@ torch.set_float32_matmul_precision("high")
 
 @dataclass
 class Args:
-    seeds: List[int] = field(default_factory=lambda: list(range(42, 47)))
+    seeds: List[int] = field(default_factory=lambda: [42])
     """List of random seeds to run sequentially. Each seed is a separate WandB run under the same group."""
     torch_deterministic: bool = True
     cuda: bool = True

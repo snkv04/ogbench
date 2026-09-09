@@ -1,4 +1,5 @@
 {
-    "count-grid-n-cells": [3, 6, 12, 24, 48],
-    "count-bonus-beta": [0.01]
+    "max-episode-steps": [1000, 2000, 4000, 8000],
+    "total-timesteps": [2000000, 4000000, 8000000],
+    "exploration-fraction": [0.1]
 }

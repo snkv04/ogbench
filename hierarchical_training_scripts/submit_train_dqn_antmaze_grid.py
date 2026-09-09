@@ -44,7 +44,9 @@ from typing import Any, Mapping
 DEFAULT_REPO_ROOT = Path(__file__).resolve().parents[1]
 
 DEFAULT_NODELISTS: list[str] = (
-    [f"smblade16b{i}" for i in range(1, 9)]
+    [f"smblade24a{i}" for i in range(1, 7)] +
+    [f"smblade16b{i}" for i in range(1, 9)] +
+    ["typhon"]
 )
 
 DEFAULT_SLURM_ARGS: list[str] = [
@@ -59,18 +61,18 @@ DEFAULT_SLURM_ARGS: list[str] = [
 DEFAULT_FIXED_TRAIN_ARGS: list[str] = [
     "--save-first-val-episodes-videos=4",
     "--no-validation-greedy",
-    "--checkpoint-up=/home/svangaru/Desktop/ogbench/.ogbench/td3_runs/antmaze-arena__train_antmaze_lowlevel_td3__1__True__True__2026-04-07_02-05-17/checkpoints/checkpoint_step1950000.pt",
-    "--checkpoint-down=/home/svangaru/Desktop/ogbench/.ogbench/td3_runs/antmaze-arena__train_antmaze_lowlevel_td3__1__True__True__2026-04-07_02-05-47/checkpoints/checkpoint_step1950000.pt",
-    "--checkpoint-left=/home/svangaru/Desktop/ogbench/.ogbench/td3_runs/antmaze-arena__train_antmaze_lowlevel_td3__1__True__True__2026-04-07_02-06-36/checkpoints/checkpoint_step1100000.pt",
-    "--checkpoint-right=/home/svangaru/Desktop/ogbench/.ogbench/td3_runs/antmaze-arena__train_antmaze_lowlevel_td3__1__True__True__2026-04-07_02-06-23/checkpoints/checkpoint_step1950000.pt",
+    "--checkpoint-up=/cs/data/people/svangaru/ogbench/.ogbench/td3_runs/antmaze-arena__train_antmaze_lowlevel_td3__1__True__True__2026-04-07_02-05-17/checkpoints/checkpoint_step1950000.pt",
+    "--checkpoint-down=/cs/data/people/svangaru/ogbench/.ogbench/td3_runs/antmaze-arena__train_antmaze_lowlevel_td3__1__True__True__2026-04-07_02-05-47/checkpoints/checkpoint_step1950000.pt",
+    "--checkpoint-left=/cs/data/people/svangaru/ogbench/.ogbench/td3_runs/antmaze-arena__train_antmaze_lowlevel_td3__1__True__True__2026-04-07_02-06-36/checkpoints/checkpoint_step1100000.pt",
+    "--checkpoint-right=/cs/data/people/svangaru/ogbench/.ogbench/td3_runs/antmaze-arena__train_antmaze_lowlevel_td3__1__True__True__2026-04-07_02-06-23/checkpoints/checkpoint_step1950000.pt",
     "--termination-time=50",
-    "--max-episode-steps=2000",
-    "--total-timesteps=2000000",
     "--track-with-wandb",
     "--reward-type=sparse",
     "--run-profiling",
+    "--count-bonus-beta=0.01",
+    "--count-grid-n-cells=12",
     "--reward-task-id=3",
-    "--goal-radius=1.5",
+    "--goal-radius=1.0",
 ]
 
 # Short labels for Slurm job names (%x in log paths); unknown keys get a compact fallback.
