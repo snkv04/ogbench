@@ -15,20 +15,22 @@ from loguru import logger as logging
 import numpy as np
 from PIL import Image
 import torch
-import torch.nn.functional as F
-import torch.optim as optim
 import tqdm
 import tyro
 import wandb
-from tensordict import TensorDict, from_module, from_modules
-from tensordict.nn import CudaGraphModule
+from tensordict import TensorDict
 from torchrl.data import LazyTensorStorage, ReplayBuffer
 
 from ogbench.locomaze.maze import make_maze_env
 from ogbench.manipspace.oracles.hierarchical.utils import add_text_overlay, save_episode_video
-from hierarchical_training_scripts.train_cube_lowlevel_td3 import Actor, QNetwork
+from hierarchical_training_scripts.td3_common import (
+    apply_compile_and_cudagraphs,
+    build_td3_networks,
+    compute_exploration_noise,
+    make_update_fns,
+    save_td3_checkpoint,
+)
 from hierarchical_training_scripts.train_cube_hrl_dqn import (
-    _log_param_counts,
     _prof_checkpoint,
     _save_profiling_bar_graph,
     _save_profiling_json,
@@ -361,43 +363,47 @@ def _log_reset(env, episode_idx: int, save_dir: str) -> None:
     Image.fromarray(frame).save(os.path.join(save_dir, f"reset_ep{episode_idx:06d}.png"))
 
 
-def save_td3_checkpoint(
-    global_step: int,
-    actor,
-    target_actor_params,
-    qnet_params,
-    qnet_target_params,
-    actor_optimizer,
-    q_optimizer,
-    save_path: str,
-) -> None:
-    checkpoint = {
-        "global_step": global_step,
-        "actor_state_dict": actor.state_dict(),
-        "target_actor_params": target_actor_params,
-        "qnet_params": qnet_params,
-        "qnet_target_params": qnet_target_params,
-        "actor_optimizer_state_dict": actor_optimizer.state_dict(),
-        "q_optimizer_state_dict": q_optimizer.state_dict(),
-    }
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    torch.save(checkpoint, save_path)
-    logging.info(f"Checkpoint saved to: {save_path}")
+class EpisodeStatsTracker:
+    """Rolling window of recent-episode training stats (returns/success), overall and goal-reachable-filtered."""
+
+    def __init__(self, window_len: int):
+        self.max_ep_ret = -float("inf")
+        self.avg_returns = deque(maxlen=window_len)
+        self.tasks_completed_at_end = deque(maxlen=window_len)
+        self.tasks_completed_at_all = deque(maxlen=window_len)
+        self.filtered_avg_returns = deque(maxlen=window_len)
+        self.filtered_tasks_completed_at_end = deque(maxlen=window_len)
+        self.filtered_tasks_completed_at_all = deque(maxlen=window_len)
+
+    def record_episode(self, episode_return: float, success: bool, episode_had_success: bool, goal_reachable: bool) -> None:
+        self.max_ep_ret = max(self.max_ep_ret, episode_return)
+        self.avg_returns.append(episode_return)
+        self.tasks_completed_at_end.append(float(success))
+        self.tasks_completed_at_all.append(float(episode_had_success))
+        if goal_reachable:
+            self.filtered_tasks_completed_at_end.append(float(success))
+            self.filtered_tasks_completed_at_all.append(float(episode_had_success))
+            self.filtered_avg_returns.append(episode_return)
+
+    def describe(self, global_step: int) -> str:
+        return f"global_step={global_step}, episodic_return={torch.tensor(self.avg_returns).mean(): 4.2f} (max={self.max_ep_ret: 4.2f})"
+
+    def wandb_logs(self) -> dict:
+        def mean_or(dq, default=0.0):
+            return float(np.mean(dq)) if dq else default
+
+        return {
+            "episode_return": mean_or(self.avg_returns),
+            "success_rate": mean_or(self.tasks_completed_at_end),
+            "completion_rate": mean_or(self.tasks_completed_at_all),
+            "filtered_episode_return": mean_or(self.filtered_avg_returns),
+            "filtered_success_rate": mean_or(self.filtered_tasks_completed_at_end),
+            "filtered_completion_rate": mean_or(self.filtered_tasks_completed_at_all),
+        }
 
 
-def _compute_exploration_noise(
-    global_step: int,
-    learning_starts: int,
-    total_timesteps: int,
-    start_noise: float,
-    end_noise: float
-) -> float:
-    anneal_frac = min(1.0, (global_step - learning_starts) / (total_timesteps / 2 - learning_starts))
-    return start_noise + anneal_frac * (end_noise - start_noise)
-
-
-if __name__ == "__main__":
-    args = tyro.cli(Args)
+def setup_experiment(args: Args) -> str:
+    """Init wandb, seed all RNGs, and return the run name."""
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     run_name = f"antmaze-{args.maze_type}__{args.exp_name}__{args.seed}__{args.compile}__{args.cudagraphs}__{timestamp}"
     logging.info(f"run_name = {run_name}")
@@ -409,16 +415,20 @@ if __name__ == "__main__":
         save_code=True,
     )
 
-    # TRY NOT TO MODIFY: seeding
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
-    device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
+    return run_name
 
-    # Env setup: MazeEnv wrapped to randomly sample init/goal on each reset.
-    base_env = make_maze_env("ant", "maze", maze_type=args.maze_type, terminate_at_goal=False, add_noise_to_init=not args.fixed_init_ij, add_noise_to_goal=False)
+
+def build_env(args: Args):
+    """Build the RandomInitGoalEnv-wrapped ant maze env and return it with action/obs metadata."""
+    base_env = make_maze_env(
+        "ant", "maze", maze_type=args.maze_type, terminate_at_goal=False,
+        add_noise_to_init=not args.fixed_init_ij, add_noise_to_goal=False,
+    )
     env = RandomInitGoalEnv(
         base_env,
         goal_offset_dir=args.goal_offset_dir,
@@ -438,125 +448,99 @@ if __name__ == "__main__":
     logging.info(f"action space: {env.action_space}")
     logging.info(f"observation space: {env.observation_space}")
 
-    actor = Actor(env=env, n_obs=n_obs, n_act=n_act, device=device, exploration_noise=args.start_exploration_noise)
-    actor_detach = Actor(env=env, n_obs=n_obs, n_act=n_act, device=device, exploration_noise=args.start_exploration_noise)
-    from_module(actor).data.to_module(actor_detach)
-    policy = actor_detach.explore
+    return env, n_obs, n_act, action_low, action_high
 
-    def get_params_qnet():
-        qf1 = QNetwork(n_obs=n_obs, n_act=n_act, device=device)
-        qf2 = QNetwork(n_obs=n_obs, n_act=n_act, device=device)
 
-        qnet_params = from_modules(qf1, qf2, as_module=True)
-        qnet_target_params = qnet_params.data.clone()
+def _reset_episode(env, run_name: str, episode_idx: int, device):
+    """Reset the env, log the reset frame, and return the initial obs tensor plus goal-reachability."""
+    obs_raw, _ = env.reset()
+    reset_frame_dir = os.path.join(".ogbench", "td3_runs", run_name, "reset_frames")
+    _log_reset(env, episode_idx, reset_frame_dir)
+    obs = torch.as_tensor(obs_raw.reshape(1, -1), device=device, dtype=torch.float)
+    goal_reachable = _is_goal_xy_reachable(env.unwrapped, env.unwrapped.cur_goal_xy)
+    return obs, goal_reachable
 
-        qnet = QNetwork(n_obs=n_obs, n_act=n_act, device="meta")
-        qnet_params.to_module(qnet)
 
-        return qnet_params, qnet_target_params, qnet
+def run_periodic_validation(args: Args, env, val_agent, actor, qnet, run_name: str, global_step: int, num_recent_episodes: int) -> None:
+    logging.info(f"Running validation with {num_recent_episodes} recent-episode window at step {global_step}...")
 
-    def get_params_actor(actor):
-        target_actor = Actor(env=env, device="meta", n_act=n_act, n_obs=n_obs)
-        actor_params = from_module(actor).data
-        target_actor_params = actor_params.clone()
-        target_actor_params.to_module(target_actor)
-        return actor_params, target_actor_params, target_actor
+    actor.eval()
+    qnet.eval()
 
-    qnet_params, qnet_target_params, qnet = get_params_qnet()
-    actor_params, target_actor_params, target_actor = get_params_actor(actor)
-
-    _log_param_counts("Actor", actor)
-    _log_param_counts("Q-network (per copy)", qnet)
-
-    q_optimizer = optim.Adam(
-        qnet_params.values(include_nested=True, leaves_only=True),
-        lr=args.learning_rate,
-        capturable=args.cudagraphs and not args.compile,
+    val_metrics = run_maze_validation_episodes(
+        env=env,
+        agent=val_agent,
+        num_episodes=args.num_validation_episodes,
+        num_episode_videos=args.num_episode_videos,
+        save_dir=os.path.join(".ogbench", "td3_runs", run_name, "validation"),
+        video_prefix=f"validation_step{global_step}",
     )
-    actor_optimizer = optim.Adam(
-        list(actor.parameters()), lr=args.learning_rate, capturable=args.cudagraphs and not args.compile
+
+    actor.train()
+    qnet.train()
+
+    logging.info(f"Validation results (step {global_step}):")
+    logging.info(f"    success_rate={val_metrics['success_rate']:.2%}")
+    logging.info(f"    completion_rate={val_metrics['completion_rate']:.2%}")
+    logging.info(f"    avg_episode_return={val_metrics['avg_episode_return']:.2f}")
+    logging.info(f"    filtered_success_rate={val_metrics['filtered_success_rate']:.2%}  (n={val_metrics['num_filtered_episodes']})")
+    logging.info(f"    filtered_completion_rate={val_metrics['filtered_completion_rate']:.2%}")
+    logging.info(f"    filtered_avg_episode_return={val_metrics['filtered_avg_episode_return']:.2f}")
+
+    wandb.log(
+        {
+            "val/success_rate": float(val_metrics["success_rate"]),
+            "val/completion_rate": float(val_metrics["completion_rate"]),
+            "val/avg_episode_return": float(val_metrics["avg_episode_return"]),
+            "val/num_episodes": float(val_metrics["num_episodes"]),
+            "val/filtered_success_rate": float(val_metrics["filtered_success_rate"]),
+            "val/filtered_completion_rate": float(val_metrics["filtered_completion_rate"]),
+            "val/filtered_avg_episode_return": float(val_metrics["filtered_avg_episode_return"]),
+            "val/num_filtered_episodes": float(val_metrics["num_filtered_episodes"]),
+        },
+        step=global_step,
+    )
+
+
+def train(args: Args, env, n_obs: int, n_act: int, action_low: float, action_high: float, run_name: str) -> None:
+    device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
+
+    networks, policy = build_td3_networks(
+        env=env,
+        n_obs=n_obs,
+        n_act=n_act,
+        device=device,
+        exploration_noise=args.start_exploration_noise,
+        learning_rate=args.learning_rate,
+        cudagraphs=args.cudagraphs,
+        compile=args.compile,
+    )
+    actor, qnet = networks.actor, networks.qnet
+    update_main, update_pol = make_update_fns(
+        networks, gamma=args.gamma, policy_noise=args.policy_noise, noise_clip=args.noise_clip,
+        action_low=action_low, action_high=action_high,
+    )
+    policy, update_main, update_pol = apply_compile_and_cudagraphs(
+        policy, update_main, update_pol, compile=args.compile, cudagraphs=args.cudagraphs
     )
 
     rb = ReplayBuffer(storage=LazyTensorStorage(args.buffer_size, device=device))
-
-    def batched_qf(params, obs, action, next_q_value=None):
-        with params.to_module(qnet):
-            vals = qnet(obs, action)
-            if next_q_value is not None:
-                loss_val = F.mse_loss(vals.view(-1), next_q_value)
-                return loss_val
-            return vals
-
-    policy_noise = args.policy_noise
-    noise_clip = args.noise_clip
-    action_scale = target_actor.action_scale
-
-    def update_main(data):
-        observations = data["observations"]
-        next_observations = data["next_observations"]
-        actions = data["actions"]
-        rewards = data["rewards"]
-        dones = data["dones"]
-        clipped_noise = torch.randn_like(actions)
-        clipped_noise = clipped_noise.mul(policy_noise).clamp(-noise_clip, noise_clip).mul(action_scale)
-
-        next_state_actions = (target_actor(next_observations) + clipped_noise).clamp(action_low, action_high)
-
-        qf_next_target = torch.vmap(batched_qf, (0, None, None))(qnet_target_params, next_observations, next_state_actions)
-        min_qf_next_target = qf_next_target.min(0).values
-        next_q_value = rewards.flatten() + args.gamma * min_qf_next_target.flatten()
-
-        qf_loss = torch.vmap(batched_qf, (0, None, None, None))(qnet_params, observations, actions, next_q_value)
-        qf_loss = qf_loss.sum(0)
-
-        q_optimizer.zero_grad()
-        qf_loss.backward()
-        q_optimizer.step()
-        return TensorDict(qf_loss=qf_loss.detach())
-
-    def update_pol(data):
-        actor_optimizer.zero_grad()
-        with qnet_params.data[0].to_module(qnet):
-            actor_loss = -qnet(data["observations"], actor(data["observations"])).mean()
-
-        actor_loss.backward()
-        actor_optimizer.step()
-        return TensorDict(actor_loss=actor_loss.detach())
 
     def extend_and_sample(transition):
         rb.extend(transition)
         return rb.sample(args.batch_size)
 
-    if args.compile:
-        mode = None
-        update_main = torch.compile(update_main, mode=mode)
-        update_pol = torch.compile(update_pol, mode=mode)
-        policy = torch.compile(policy, mode=mode)
-
-    if args.cudagraphs:
-        update_main = CudaGraphModule(update_main, in_keys=[], out_keys=[], warmup=5)
-        update_pol = CudaGraphModule(update_pol, in_keys=[], out_keys=[], warmup=5)
-        policy = CudaGraphModule(policy)
-
     val_agent = AntMazeTD3Agent(actor=actor, device=device, action_low=action_low, action_high=action_high)
 
-    reset_frame_dir = os.path.join(".ogbench", "td3_runs", run_name, "reset_frames")
-
-    # TRY NOT TO MODIFY: start the game
     obs_raw, _ = env.reset(seed=args.seed)
     episode_idx = 0
+    reset_frame_dir = os.path.join(".ogbench", "td3_runs", run_name, "reset_frames")
     _log_reset(env, episode_idx, reset_frame_dir)
     obs = torch.as_tensor(obs_raw.reshape(1, -1), device=device, dtype=torch.float)
 
+    stats = EpisodeStatsTracker(window_len=args.episode_window_len)
     pbar = tqdm.tqdm(range(args.total_timesteps))
     start_time = None
-    max_ep_ret = -float("inf")
-    avg_returns = deque(maxlen=args.episode_window_len)
-    train_tasks_completed_at_end = deque(maxlen=args.episode_window_len)
-    train_tasks_completed_at_all = deque(maxlen=args.episode_window_len)
-    train_filtered_avg_returns = deque(maxlen=args.episode_window_len)
-    train_filtered_tasks_completed_at_end = deque(maxlen=args.episode_window_len)
-    train_filtered_tasks_completed_at_all = deque(maxlen=args.episode_window_len)
     desc = ""
     episode_return = 0.0
     episode_had_success = False
@@ -564,7 +548,6 @@ if __name__ == "__main__":
     save_this_ep = False
     episode_frames = []
 
-    # Main training loop
     for global_step in pbar:
         if args.run_profiling and global_step == args.profiling_start:
             args.last_time = time.time()
@@ -584,26 +567,20 @@ if __name__ == "__main__":
             start_time = time.time()
             measure_burnin = global_step
 
-        # ALGO LOGIC: put action logic here
         if global_step < args.learning_starts:
             action = env.action_space.sample()
         else:
             current_exploration_noise = torch.tensor(
-                _compute_exploration_noise(
-                    global_step,
-                    args.learning_starts,
-                    args.total_timesteps,
-                    args.start_exploration_noise,
-                    args.end_exploration_noise
+                compute_exploration_noise(
+                    global_step, args.learning_starts, args.total_timesteps,
+                    args.start_exploration_noise, args.end_exploration_noise,
                 ),
-                device=device, dtype=torch.float
+                device=device, dtype=torch.float,
             )
-            # logging.info(f"At global step {global_step}, current exploration noise = {current_exploration_noise}")
             action_tensor = policy(obs=obs, exploration_noise=current_exploration_noise).clamp(action_low, action_high)
             action = action_tensor[0].cpu().numpy()
         _prof_checkpoint(args, global_step, "select_agent_action")
 
-        # TRY NOT TO MODIFY: execute the game and log data.
         next_obs_raw, env_reward, terminated, truncated, info = env.step(action)
         done = terminated or truncated
         next_obs = torch.as_tensor(next_obs_raw.reshape(1, -1), device=device, dtype=torch.float)
@@ -619,7 +596,6 @@ if __name__ == "__main__":
         if success and not episode_had_success:
             episode_had_success = True
 
-        # TRY NOT TO MODIFY: save data to replay buffer
         actions_tensor = torch.as_tensor(action, device=device, dtype=torch.float).unsqueeze(0)
         terminations = torch.as_tensor([terminated], device=device, dtype=torch.bool)
         transition = TensorDict(
@@ -633,12 +609,10 @@ if __name__ == "__main__":
             device=device,
         )
 
-        # TRY NOT TO MODIFY: CRUCIAL step easy to overlook
         obs = next_obs
         data = extend_and_sample(transition)
         _prof_checkpoint(args, global_step, "add_transition_to_rb")
 
-        # ALGO LOGIC: training.
         if global_step > args.learning_starts:
             out_main = update_main(data)
             _prof_checkpoint(args, global_step, "update_td3_critic")
@@ -646,8 +620,8 @@ if __name__ == "__main__":
                 out_main.update(update_pol(data))
 
                 # lerp is defined as x' = x + w (y-x), which is equivalent to x' = (1-w) x + w y
-                qnet_target_params.lerp_(qnet_params.data, args.tau)
-                target_actor_params.lerp_(actor_params.data, args.tau)
+                networks.qnet_target_params.lerp_(networks.qnet_params.data, args.tau)
+                networks.target_actor_params.lerp_(networks.actor_params.data, args.tau)
             _prof_checkpoint(args, global_step, "update_td3_actor")
 
             if global_step % 100 == 0 and start_time is not None:
@@ -655,37 +629,16 @@ if __name__ == "__main__":
                 pbar.set_description(f"{speed: 4.4f} sps, " + desc)
                 with torch.no_grad():
                     logs = {
-                        "episode_return": float(np.mean(avg_returns)) if avg_returns else 0.0,
-                        "success_rate": float(np.mean(train_tasks_completed_at_end)) if train_tasks_completed_at_end else 0.0,
-                        "completion_rate": float(np.mean(train_tasks_completed_at_all)) if train_tasks_completed_at_all else 0.0,
-                        "filtered_episode_return": float(np.mean(train_filtered_avg_returns)) if train_filtered_avg_returns else 0.0,
-                        "filtered_success_rate": float(np.mean(train_filtered_tasks_completed_at_end)) if train_filtered_tasks_completed_at_end else 0.0,
-                        "filtered_completion_rate": float(np.mean(train_filtered_tasks_completed_at_all)) if train_filtered_tasks_completed_at_all else 0.0,
+                        **stats.wandb_logs(),
                         "actor_loss": out_main["actor_loss"].mean(),
                         "qf_loss": out_main["qf_loss"].mean(),
                     }
-                wandb.log(
-                    {
-                        "speed": speed,
-                        **logs,
-                    },
-                    step=global_step,
-                )
+                wandb.log({"speed": speed, **logs}, step=global_step)
             _prof_checkpoint(args, global_step, "log_to_wandb")
 
-        # Handle end of episode
         if done:
-            max_ep_ret = max(max_ep_ret, episode_return)
-            avg_returns.append(episode_return)
-            train_tasks_completed_at_end.append(float(success))
-            train_tasks_completed_at_all.append(float(episode_had_success))
-            if episode_goal_reachable:
-                train_filtered_tasks_completed_at_end.append(float(success))
-                train_filtered_tasks_completed_at_all.append(float(episode_had_success))
-                train_filtered_avg_returns.append(episode_return)
-            desc = (
-                f"global_step={global_step}, episodic_return={torch.tensor(avg_returns).mean(): 4.2f} (max={max_ep_ret: 4.2f})"
-            )
+            stats.record_episode(episode_return, success, episode_had_success, episode_goal_reachable)
+            desc = stats.describe(global_step)
 
             if save_this_ep:
                 assert episode_frames, "Episode frames should not be empty"
@@ -697,91 +650,52 @@ if __name__ == "__main__":
                     fps=30,
                 )
 
-            obs_raw, _ = env.reset()
             episode_idx += 1
-            _log_reset(env, episode_idx, reset_frame_dir)
-            obs = torch.as_tensor(obs_raw.reshape(1, -1), device=device, dtype=torch.float)
+            obs, episode_goal_reachable = _reset_episode(env, run_name, episode_idx, device)
             episode_return = 0.0
             episode_had_success = False
-            episode_goal_reachable = _is_goal_xy_reachable(env.unwrapped, env.unwrapped.cur_goal_xy)
-            # logging.info(f"Is goal {env.unwrapped.cur_goal_xy} reachable? {episode_goal_reachable}")
 
             save_this_ep = (
                 args.save_every_k_training_episodes > 0
                 and episode_idx % args.save_every_k_training_episodes == 0
             )
-            if save_this_ep:
-                episode_frames = [env.render()]
-            else:
-                episode_frames = []
+            episode_frames = [env.render()] if save_this_ep else []
 
             _prof_checkpoint(args, global_step, "reset_env_at_ep_end")
 
-        # Optional validation at fixed step intervals
         if global_step > args.learning_starts and global_step % args.validation_freq == 0:
-            logging.info(f"Running validation with {len(avg_returns)} recent-episode window at step {global_step}...")
-
-            actor.eval()
-            qnet.eval()
-
-            val_metrics = run_maze_validation_episodes(
-                env=env,
-                agent=val_agent,
-                num_episodes=args.num_validation_episodes,
-                # max_episode_steps=args.max_episode_steps,
-                num_episode_videos=args.num_episode_videos,
-                save_dir=os.path.join(".ogbench", "td3_runs", run_name, "validation"),
-                video_prefix=f"validation_step{global_step}",
-            )
-
-            actor.train()
-            qnet.train()
-
-            logging.info(f"Validation results (step {global_step}):")
-            logging.info(f"    success_rate={val_metrics['success_rate']:.2%}")
-            logging.info(f"    completion_rate={val_metrics['completion_rate']:.2%}")
-            logging.info(f"    avg_episode_return={val_metrics['avg_episode_return']:.2f}")
-            logging.info(f"    filtered_success_rate={val_metrics['filtered_success_rate']:.2%}  (n={val_metrics['num_filtered_episodes']})")
-            logging.info(f"    filtered_completion_rate={val_metrics['filtered_completion_rate']:.2%}")
-            logging.info(f"    filtered_avg_episode_return={val_metrics['filtered_avg_episode_return']:.2f}")
-
-            wandb.log(
-                {
-                    "val/success_rate": float(val_metrics["success_rate"]),
-                    "val/completion_rate": float(val_metrics["completion_rate"]),
-                    "val/avg_episode_return": float(val_metrics["avg_episode_return"]),
-                    "val/num_episodes": float(val_metrics["num_episodes"]),
-                    "val/filtered_success_rate": float(val_metrics["filtered_success_rate"]),
-                    "val/filtered_completion_rate": float(val_metrics["filtered_completion_rate"]),
-                    "val/filtered_avg_episode_return": float(val_metrics["filtered_avg_episode_return"]),
-                    "val/num_filtered_episodes": float(val_metrics["num_filtered_episodes"]),
-                },
-                step=global_step,
-            )
+            run_periodic_validation(args, env, val_agent, actor, qnet, run_name, global_step, len(stats.avg_returns))
             _prof_checkpoint(args, global_step, "run_validation")
 
             checkpoint_path = os.path.join(".ogbench", "td3_runs", run_name, "checkpoints", f"checkpoint_step{global_step}.pt")
             save_td3_checkpoint(
                 global_step=global_step,
                 actor=actor,
-                target_actor_params=target_actor_params,
-                qnet_params=qnet_params,
-                qnet_target_params=qnet_target_params,
-                actor_optimizer=actor_optimizer,
-                q_optimizer=q_optimizer,
+                target_actor_params=networks.target_actor_params,
+                qnet_params=networks.qnet_params,
+                qnet_target_params=networks.qnet_target_params,
+                actor_optimizer=networks.actor_optimizer,
+                q_optimizer=networks.q_optimizer,
                 save_path=checkpoint_path,
             )
             _prof_checkpoint(args, global_step, "save_td3_checkpoint")
 
-    # Profiling output
     if args.run_profiling:
         save_path = os.path.join(".ogbench", "td3_profiling", run_name)
         os.makedirs(save_path, exist_ok=True)
-        _save_profiling_json(
-            args.profiling_dict, save_path, args.profiling_start, args.total_timesteps, "TD3"
-        )
-        _save_profiling_bar_graph(
-            args.profiling_dict, save_path, args.profiling_start, args.total_timesteps, "TD3"
-        )
+        _save_profiling_json(args.profiling_dict, save_path, args.profiling_start, args.total_timesteps, "TD3")
+        _save_profiling_bar_graph(args.profiling_dict, save_path, args.profiling_start, args.total_timesteps, "TD3")
 
     env.close()
+
+
+def main() -> None:
+    args = tyro.cli(Args)
+    run_name = setup_experiment(args)
+    env, n_obs, n_act, action_low, action_high = build_env(args)
+    train(args, env, n_obs, n_act, action_low, action_high, run_name)
+
+
+if __name__ == "__main__":
+    main()
+

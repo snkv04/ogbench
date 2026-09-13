@@ -13,7 +13,7 @@ from ogbench.manipspace.oracles.hierarchical.hierarchical_agent import Hierarchi
 from ogbench.manipspace.oracles.hierarchical.option import Option
 
 from hierarchical_training_scripts.hierarchical_dqn_agent import QNetwork
-from hierarchical_training_scripts.train_cube_lowlevel_td3 import Actor
+from hierarchical_training_scripts.td3_common import Actor
 
 
 class MoveInDirectionOption(Option):

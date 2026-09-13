@@ -38,7 +38,7 @@ from hierarchical_training_scripts.train_cube_hrl_dqn import (
     _save_profiling_json,
     save_checkpoint,
 )
-from hierarchical_training_scripts.train_cube_lowlevel_td3 import Actor
+from hierarchical_training_scripts.td3_common import Actor
 from ogbench.locomaze.maze import make_maze_env
 from ogbench.manipspace.oracles.hierarchical.option import Option
 

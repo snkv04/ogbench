@@ -5,7 +5,6 @@ os.environ["TORCHDYNAMO_INLINE_INBUILT_NN_MODULES"] = "1"
 
 from datetime import datetime
 import math
-import os
 import random
 import time
 from collections import deque
@@ -16,19 +15,19 @@ import gymnasium as gym
 from loguru import logger as logging
 import numpy as np
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
 import tqdm
 import tyro
 import wandb
-from tensordict import TensorDict, from_module, from_modules
-from tensordict.nn import CudaGraphModule
+from tensordict import TensorDict
 from torchrl.data import LazyTensorStorage, ReplayBuffer
 
 import ogbench.manipspace  # Register environments
+from hierarchical_training_scripts.td3_common import (
+    apply_compile_and_cudagraphs,
+    build_td3_networks,
+    make_update_fns,
+)
 from hierarchical_training_scripts.train_cube_hrl_dqn import (
-    _log_param_counts,
     _prof_checkpoint,
     _save_profiling_bar_graph,
     _save_profiling_json,
@@ -115,51 +114,6 @@ class Args:
     # Profiling
     run_profiling: bool = False
     profiling_start: int = 0
-
-
-class Actor(nn.Module):
-    def __init__(self, n_obs, n_act, env, exploration_noise=1, device=None, h_dim=256):
-        super().__init__()
-        self.fc1 = nn.Linear(n_obs, h_dim, device=device)
-        self.fc2 = nn.Linear(h_dim, h_dim, device=device)
-        self.fc_mu = nn.Linear(h_dim, n_act, device=device)
-        # action rescaling
-        self.register_buffer(
-            "action_scale",
-            torch.tensor((env.action_space.high - env.action_space.low) / 2.0, dtype=torch.float32, device=device),
-        )
-        self.register_buffer(
-            "action_bias",
-            torch.tensor((env.action_space.high + env.action_space.low) / 2.0, dtype=torch.float32, device=device),
-        )
-        self.register_buffer("exploration_noise", torch.as_tensor(exploration_noise, device=device))
-
-    def forward(self, obs):
-        obs = F.relu(self.fc1(obs))
-        obs = F.relu(self.fc2(obs))
-        obs = self.fc_mu(obs).tanh()
-        return obs * self.action_scale + self.action_bias
-
-    def explore(self, obs, exploration_noise=None):
-        act = self(obs)
-        noise = self.exploration_noise if exploration_noise is None else exploration_noise
-        return act + torch.randn_like(act).mul(self.action_scale * noise)
-
-
-# ALGO LOGIC: initialize agent here:
-class QNetwork(nn.Module):
-    def __init__(self, n_obs, n_act, device=None, h_dim=256):
-        super().__init__()
-        self.fc1 = nn.Linear(n_obs + n_act, h_dim, device=device)
-        self.fc2 = nn.Linear(h_dim, h_dim, device=device)
-        self.fc3 = nn.Linear(h_dim, 1, device=device)
-
-    def forward(self, x, a):
-        x = torch.cat([x, a], 1)
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = self.fc3(x)
-        return x
 
 
 # Size-14 observation (same structure as HierarchicalDQNAgent.get_obs_tensor)
@@ -399,8 +353,8 @@ def _create_cube_options(env, reset_info, args):
     return {opt.name: opt for opt in options}
 
 
-if __name__ == "__main__":
-    args = tyro.cli(Args)
+def setup_experiment(args: Args) -> str:
+    """Init wandb, seed all RNGs, and return the run name."""
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{args.compile}__{args.cudagraphs}__{timestamp}"
 
@@ -411,15 +365,16 @@ if __name__ == "__main__":
         save_code=True,
     )
 
-    # TRY NOT TO MODIFY: seeding
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
-    device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
+    return run_name
 
-    # env setup: single non-vectorized env created via make_cube_env (no extra wrappers)
+
+def build_env(args: Args):
+    """Create the (non-vectorized) cube env and return it with action/obs metadata."""
     env = make_cube_env(
         args.env_id,
         args.seed,
@@ -437,114 +392,53 @@ if __name__ == "__main__":
     logging.info(f"action space: {env.action_space}")
     logging.info(f"observation space (logical): shape=({OBS_DIM},)")
 
-    actor = Actor(env=env, n_obs=n_obs, n_act=n_act, device=device, exploration_noise=args.exploration_noise)
-    actor_detach = Actor(env=env, n_obs=n_obs, n_act=n_act, device=device, exploration_noise=args.exploration_noise)
-    # Copy params to actor_detach without grad
-    from_module(actor).data.to_module(actor_detach)
-    policy = actor_detach.explore
+    return env, n_obs, n_act, action_low, action_high
 
-    def get_params_qnet():
-        qf1 = QNetwork(n_obs=n_obs, n_act=n_act, device=device)
-        qf2 = QNetwork(n_obs=n_obs, n_act=n_act, device=device)
 
-        qnet_params = from_modules(qf1, qf2, as_module=True)
-        qnet_target_params = qnet_params.data.clone()
-
-        # discard params of net
-        qnet = QNetwork(n_obs=n_obs, n_act=n_act, device="meta")
-        qnet_params.to_module(qnet)
-
-        return qnet_params, qnet_target_params, qnet
-
-    def get_params_actor(actor):
-        target_actor = Actor(env=env, device="meta", n_act=n_act, n_obs=n_obs)
-        actor_params = from_module(actor).data
-        target_actor_params = actor_params.clone()
-        target_actor_params.to_module(target_actor)
-        return actor_params, target_actor_params, target_actor
-
-    qnet_params, qnet_target_params, qnet = get_params_qnet()
-    actor_params, target_actor_params, target_actor = get_params_actor(actor)
-
-    _log_param_counts("Actor", actor)
-    _log_param_counts("Q-network (per copy)", qnet)
-
-    q_optimizer = optim.Adam(
-        qnet_params.values(include_nested=True, leaves_only=True),
-        lr=args.learning_rate,
-        capturable=args.cudagraphs and not args.compile,
+def _reset_episode(env, args: Args, device):
+    """Reset the env, sample a fresh target + option set, and return the initial obs tensor."""
+    obs_raw, reset_info = env.reset()
+    target_block, target_pos, target_yaw = _get_target_from_info(env, reset_info)
+    obs = torch.as_tensor(
+        _info_to_obs_14(reset_info, target_block, target_pos, target_yaw).reshape(1, -1),
+        device=device,
+        dtype=torch.float,
     )
-    actor_optimizer = optim.Adam(
-        list(actor.parameters()), lr=args.learning_rate, capturable=args.cudagraphs and not args.compile
+    cube_options = _create_cube_options(env, reset_info, args)
+    return obs, target_block, target_pos, target_yaw, cube_options
+
+
+def train(args: Args, env, n_obs: int, n_act: int, action_low: float, action_high: float, run_name: str) -> None:
+    device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
+
+    networks, policy = build_td3_networks(
+        env=env,
+        n_obs=n_obs,
+        n_act=n_act,
+        device=device,
+        exploration_noise=args.exploration_noise,
+        learning_rate=args.learning_rate,
+        cudagraphs=args.cudagraphs,
+        compile=args.compile,
+    )
+    actor, qnet = networks.actor, networks.qnet
+    update_main, update_pol = make_update_fns(
+        networks, gamma=args.gamma, policy_noise=args.policy_noise, noise_clip=args.noise_clip,
+        action_low=action_low, action_high=action_high,
+    )
+    policy, update_main, update_pol = apply_compile_and_cudagraphs(
+        policy, update_main, update_pol, compile=args.compile, cudagraphs=args.cudagraphs
     )
 
     rb = ReplayBuffer(storage=LazyTensorStorage(args.buffer_size, device=device))
-
-    def batched_qf(params, obs, action, next_q_value=None):
-        with params.to_module(qnet):
-            vals = qnet(obs, action)
-            if next_q_value is not None:
-                loss_val = F.mse_loss(vals.view(-1), next_q_value)
-                return loss_val
-            return vals
-
-    policy_noise = args.policy_noise
-    noise_clip = args.noise_clip
-    action_scale = target_actor.action_scale
-
-    def update_main(data):
-        observations = data["observations"]
-        next_observations = data["next_observations"]
-        actions = data["actions"]
-        rewards = data["rewards"]
-        dones = data["dones"]
-        clipped_noise = torch.randn_like(actions)
-        clipped_noise = clipped_noise.mul(policy_noise).clamp(-noise_clip, noise_clip).mul(action_scale)
-
-        next_state_actions = (target_actor(next_observations) + clipped_noise).clamp(action_low, action_high)
-
-        qf_next_target = torch.vmap(batched_qf, (0, None, None))(qnet_target_params, next_observations, next_state_actions)
-        min_qf_next_target = qf_next_target.min(0).values
-        # Note: We don't use the done signal here, in order to capture the infinite horizon
-        next_q_value = rewards.flatten() + args.gamma * min_qf_next_target.flatten()
-
-        qf_loss = torch.vmap(batched_qf, (0, None, None, None))(qnet_params, observations, actions, next_q_value)
-        qf_loss = qf_loss.sum(0)
-
-        # optimize the model
-        q_optimizer.zero_grad()
-        qf_loss.backward()
-        q_optimizer.step()
-        return TensorDict(qf_loss=qf_loss.detach())
-
-    def update_pol(data):
-        actor_optimizer.zero_grad()
-        with qnet_params.data[0].to_module(qnet):
-            actor_loss = -qnet(data["observations"], actor(data["observations"])).mean()
-
-        actor_loss.backward()
-        actor_optimizer.step()
-        return TensorDict(actor_loss=actor_loss.detach())
 
     def extend_and_sample(transition):
         rb.extend(transition)
         return rb.sample(args.batch_size)
 
-    if args.compile:
-        mode = None  # "reduce-overhead" if not args.cudagraphs else None
-        update_main = torch.compile(update_main, mode=mode)
-        update_pol = torch.compile(update_pol, mode=mode)
-        policy = torch.compile(policy, mode=mode)
-
-    if args.cudagraphs:
-        update_main = CudaGraphModule(update_main, in_keys=[], out_keys=[], warmup=5)
-        update_pol = CudaGraphModule(update_pol, in_keys=[], out_keys=[], warmup=5)
-        policy = CudaGraphModule(policy)
-
     # Validation agent (uses deterministic actor)
     val_agent = LowLevelTD3Agent(env=env, actor=actor, device=device, action_low=action_low, action_high=action_high)
 
-    # TRY NOT TO MODIFY: start the game
     obs_raw, reset_info = env.reset(seed=args.seed)
     target_block, target_pos, target_yaw = _get_target_from_info(env, reset_info)
     obs = torch.as_tensor(
@@ -554,10 +448,8 @@ if __name__ == "__main__":
     )
     cube_options = _create_cube_options(env, reset_info, args)
     if args.reward_option not in cube_options:
-        raise ValueError(
-            f"Unknown reward_option '{args.reward_option}'. "
-            f"Available: {list(cube_options.keys())}"
-        )
+        raise ValueError(f"Unknown reward_option '{args.reward_option}'. Available: {list(cube_options.keys())}")
+
     pbar = tqdm.tqdm(range(args.total_timesteps))
     start_time = None
     max_ep_ret = -float("inf")
@@ -565,7 +457,6 @@ if __name__ == "__main__":
     desc = ""
     episode_return = 0.0
 
-    # Main training loop
     for global_step in pbar:
         if args.run_profiling and global_step == args.profiling_start:
             args.last_time = time.time()
@@ -582,17 +473,13 @@ if __name__ == "__main__":
             start_time = time.time()
             measure_burnin = global_step
 
-        # ALGO LOGIC: put action logic here
         if global_step < args.learning_starts:
-            # Sample random exploratory action from env.action_space
             action = env.action_space.sample()
         else:
-            # Policy outputs a batch of size 1; take the single action and clamp
             action_tensor = policy(obs=obs).clamp(action_low, action_high)
             action = action_tensor[0].cpu().numpy()
         _prof_checkpoint(args, global_step, "select_agent_action")
 
-        # TRY NOT TO MODIFY: execute the game and log data.
         next_obs_raw, env_reward, terminated, truncated, info = env.step(action)
         done = terminated or truncated
         next_obs = torch.as_tensor(
@@ -601,14 +488,6 @@ if __name__ == "__main__":
             dtype=torch.float,
         )
         _prof_checkpoint(args, global_step, "step_env")
-        # logging.info(f"global_step = {global_step}")
-        # logging.info(f"action = {action}")
-        # logging.info(f"next_obs_raw = {next_obs_raw}")
-        # logging.info(f"next_obs = {next_obs}")
-        # logging.info(f"terminated = {terminated}")
-        # logging.info(f"truncated = {truncated}")
-        # logging.info(f"info = {info}")
-        # logging.info("")
 
         # Replace environment rewards with sparse option-based reward from selected option
         single_next_obs = next_obs[0]
@@ -616,11 +495,7 @@ if __name__ == "__main__":
         rewards = torch.as_tensor([[reward_value]], device=device, dtype=torch.float)
         episode_return += reward_value
         _prof_checkpoint(args, global_step, "compute_option_reward")
-        # logging.info(f"env_reward = {env_reward}")
-        # logging.info(f"reward_value = {reward_value}")
-        # logging.info(f"rewards = {rewards}")
 
-        # TRY NOT TO MODIFY: save data to replay buffer
         actions_tensor = torch.as_tensor(action, device=device, dtype=torch.float).unsqueeze(0)
         terminations = torch.as_tensor([terminated], device=device, dtype=torch.bool)
         transition = TensorDict(
@@ -634,21 +509,18 @@ if __name__ == "__main__":
             device=device,
         )
 
-        # TRY NOT TO MODIFY: CRUCIAL step easy to overlook
         obs = next_obs
         data = extend_and_sample(transition)
         _prof_checkpoint(args, global_step, "add_transition_to_rb")
 
-        # ALGO LOGIC: training.
         if global_step > args.learning_starts:
             out_main = update_main(data)
             if global_step % args.policy_frequency == 0:
                 out_main.update(update_pol(data))
 
-                # update the target networks
                 # lerp is defined as x' = x + w (y-x), which is equivalent to x' = (1-w) x + w y
-                qnet_target_params.lerp_(qnet_params.data, args.tau)
-                target_actor_params.lerp_(actor_params.data, args.tau)
+                networks.qnet_target_params.lerp_(networks.qnet_params.data, args.tau)
+                networks.target_actor_params.lerp_(networks.actor_params.data, args.tau)
             _prof_checkpoint(args, global_step, "update_td3_params")
 
             if global_step % 100 == 0 and start_time is not None:
@@ -660,41 +532,21 @@ if __name__ == "__main__":
                         "actor_loss": out_main["actor_loss"].mean(),
                         "qf_loss": out_main["qf_loss"].mean(),
                     }
-                wandb.log(
-                    {
-                        "speed": speed,
-                        **logs,
-                    },
-                    step=global_step,
-                )
+                wandb.log({"speed": speed, **logs}, step=global_step)
             _prof_checkpoint(args, global_step, "log_to_wandb")
 
-        # Handle end of episode
         if done:
-            # Handle episode-level logging
             max_ep_ret = max(max_ep_ret, episode_return)
             avg_returns.append(episode_return)
-            desc = (
-                f"global_step={global_step}, episodic_return={torch.tensor(avg_returns).mean(): 4.2f} (max={max_ep_ret: 4.2f})"
-            )
+            desc = f"global_step={global_step}, episodic_return={torch.tensor(avg_returns).mean(): 4.2f} (max={max_ep_ret: 4.2f})"
 
-            # Reset environment
-            obs_raw, reset_info = env.reset()
-            target_block, target_pos, target_yaw = _get_target_from_info(env, reset_info)
-            obs = torch.as_tensor(
-                _info_to_obs_14(reset_info, target_block, target_pos, target_yaw).reshape(1, -1),
-                device=device,
-                dtype=torch.float,
-            )
-            cube_options = _create_cube_options(env, reset_info, args)
+            obs, target_block, target_pos, target_yaw, cube_options = _reset_episode(env, args, device)
             episode_return = 0.0
             _prof_checkpoint(args, global_step, "reset_env")
 
-        # Optional validation at fixed step intervals
         if global_step > args.learning_starts and global_step % args.validation_freq == 0:
             logging.info(f"Running validation with  {len(avg_returns)} recent-episode window at step {global_step}...")
 
-            # Switch to eval mode
             actor.eval()
             qnet.eval()
 
@@ -709,11 +561,9 @@ if __name__ == "__main__":
                 video_prefix=f"validation_step{global_step}",
             )
 
-            # Switch back to train mode
             actor.train()
             qnet.train()
 
-            # Log validation metrics
             logging.info(f"Validation results (step {global_step}):")
             logging.info(f"    success_rate={val_metrics['success_rate']:.2%}")
             logging.info(f"    completion_rate={val_metrics['completion_rate']:.2%}")
@@ -730,15 +580,21 @@ if __name__ == "__main__":
                 step=global_step,
             )
 
-    # Profiling output
     if args.run_profiling:
         save_path = os.path.join(".ogbench", "td3_profiling", run_name)
         os.makedirs(save_path, exist_ok=True)
-        _save_profiling_json(
-            args.profiling_dict, save_path, args.profiling_start, args.total_timesteps, "TD3"
-        )
-        _save_profiling_bar_graph(
-            args.profiling_dict, save_path, args.profiling_start, args.total_timesteps, "TD3"
-        )
+        _save_profiling_json(args.profiling_dict, save_path, args.profiling_start, args.total_timesteps, "TD3")
+        _save_profiling_bar_graph(args.profiling_dict, save_path, args.profiling_start, args.total_timesteps, "TD3")
 
     env.close()
+
+
+def main() -> None:
+    args = tyro.cli(Args)
+    run_name = setup_experiment(args)
+    env, n_obs, n_act, action_low, action_high = build_env(args)
+    train(args, env, n_obs, n_act, action_low, action_high, run_name)
+
+
+if __name__ == "__main__":
+    main()
