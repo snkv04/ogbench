@@ -13,4 +13,3 @@ slurm_logs/
 *.log
 wandb/
 experts
-*.sh
