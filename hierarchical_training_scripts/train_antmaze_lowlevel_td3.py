@@ -451,9 +451,9 @@ def build_env(args: Args):
     return env, n_obs, n_act, action_low, action_high
 
 
-def _reset_episode(env, run_name: str, episode_idx: int, device):
+def _reset_episode(env, run_name: str, episode_idx: int, device, seed: Optional[int] = None):
     """Reset the env, log the reset frame, and return the initial obs tensor plus goal-reachability."""
-    obs_raw, _ = env.reset()
+    obs_raw, _ = env.reset(seed=seed)
     reset_frame_dir = os.path.join(".ogbench", "td3_runs", run_name, "reset_frames")
     _log_reset(env, episode_idx, reset_frame_dir)
     obs = torch.as_tensor(obs_raw.reshape(1, -1), device=device, dtype=torch.float)
@@ -532,11 +532,8 @@ def train(args: Args, env, n_obs: int, n_act: int, action_low: float, action_hig
 
     val_agent = AntMazeTD3Agent(actor=actor, device=device, action_low=action_low, action_high=action_high)
 
-    obs_raw, _ = env.reset(seed=args.seed)
     episode_idx = 0
-    reset_frame_dir = os.path.join(".ogbench", "td3_runs", run_name, "reset_frames")
-    _log_reset(env, episode_idx, reset_frame_dir)
-    obs = torch.as_tensor(obs_raw.reshape(1, -1), device=device, dtype=torch.float)
+    obs, episode_goal_reachable = _reset_episode(env, run_name, episode_idx, device, seed=args.seed)
 
     stats = EpisodeStatsTracker(window_len=args.episode_window_len)
     pbar = tqdm.tqdm(range(args.total_timesteps))
@@ -544,7 +541,6 @@ def train(args: Args, env, n_obs: int, n_act: int, action_low: float, action_hig
     desc = ""
     episode_return = 0.0
     episode_had_success = False
-    episode_goal_reachable = _is_goal_xy_reachable(env.unwrapped, env.unwrapped.cur_goal_xy)
     save_this_ep = False
     episode_frames = []
 

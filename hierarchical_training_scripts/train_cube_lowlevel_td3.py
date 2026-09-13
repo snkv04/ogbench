@@ -395,9 +395,9 @@ def build_env(args: Args):
     return env, n_obs, n_act, action_low, action_high
 
 
-def _reset_episode(env, args: Args, device):
+def _reset_episode(env, args: Args, device, seed: Optional[int] = None):
     """Reset the env, sample a fresh target + option set, and return the initial obs tensor."""
-    obs_raw, reset_info = env.reset()
+    obs_raw, reset_info = env.reset(seed=seed)
     target_block, target_pos, target_yaw = _get_target_from_info(env, reset_info)
     obs = torch.as_tensor(
         _info_to_obs_14(reset_info, target_block, target_pos, target_yaw).reshape(1, -1),
@@ -439,14 +439,7 @@ def train(args: Args, env, n_obs: int, n_act: int, action_low: float, action_hig
     # Validation agent (uses deterministic actor)
     val_agent = LowLevelTD3Agent(env=env, actor=actor, device=device, action_low=action_low, action_high=action_high)
 
-    obs_raw, reset_info = env.reset(seed=args.seed)
-    target_block, target_pos, target_yaw = _get_target_from_info(env, reset_info)
-    obs = torch.as_tensor(
-        _info_to_obs_14(reset_info, target_block, target_pos, target_yaw).reshape(1, -1),
-        device=device,
-        dtype=torch.float,
-    )
-    cube_options = _create_cube_options(env, reset_info, args)
+    obs, target_block, target_pos, target_yaw, cube_options = _reset_episode(env, args, device, seed=args.seed)
     if args.reward_option not in cube_options:
         raise ValueError(f"Unknown reward_option '{args.reward_option}'. Available: {list(cube_options.keys())}")
 
