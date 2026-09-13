@@ -504,6 +504,7 @@ def run_periodic_validation(args: Args, env, val_agent, actor, qnet, run_name: s
 
 def train(args: Args, env, n_obs: int, n_act: int, action_low: float, action_high: float, run_name: str) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
+    logging.info(f"Device: {device}")
 
     networks, policy = build_td3_networks(
         env=env,
