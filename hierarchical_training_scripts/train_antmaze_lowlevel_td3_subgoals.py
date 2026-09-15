@@ -1,6 +1,7 @@
 import os
 
 os.environ["TORCHDYNAMO_INLINE_INBUILT_NN_MODULES"] = "1"
+os.environ["NO_COLOR"] = "1"  # avoid ANSI color codes corrupting slurm .out/.err logs
 
 from datetime import datetime
 import math
@@ -112,6 +113,9 @@ class Args:
     """min distance (in maze unit blocks) from init at which a goal may be sampled"""
     max_goal_resample_attempts: int = 100
     """max number of rejection-sampling attempts for a valid (non-wall) goal before falling back to goal == init"""
+    success_tolerance: Optional[float] = None
+    """success radius (== rendered goal-dot radius), in world units, NOT maze unit blocks like
+    subgoal_selection_radius/min_subgoal_radius; None uses MazeEnv's default (0.5 for ant)"""
 
     # Profiling
     run_profiling: bool = False
@@ -424,7 +428,7 @@ class EpisodeStatsTracker:
 def setup_experiment(args: Args) -> str:
     """Init wandb, seed all RNGs, and return the run name."""
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    run_name = f"antmaze-{args.maze_type}__{args.exp_name}__{args.seed}__{args.compile}__{args.cudagraphs}__{timestamp}"
+    run_name = f"antmaze-{args.maze_type}__{args.exp_name}__seed{args.seed}__ssr{args.subgoal_selection_radius}__st{args.success_tolerance}__{timestamp}"
     logging.info(f"run_name = {run_name}")
 
     wandb.init(
@@ -447,6 +451,7 @@ def build_env(args: Args):
     base_env = make_maze_env(
         "ant", "maze", maze_type=args.maze_type, terminate_at_goal=False,
         add_noise_to_init=not args.fixed_init_ij, add_noise_to_goal=False,
+        goal_radius=args.success_tolerance,
     )
     env = RandomInitGoalEnv(
         base_env,
