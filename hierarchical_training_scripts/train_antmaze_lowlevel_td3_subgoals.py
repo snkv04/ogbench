@@ -117,6 +117,17 @@ class Args:
     """success radius (== rendered goal-dot radius), in world units, NOT maze unit blocks like
     subgoal_selection_radius/min_subgoal_radius; None uses MazeEnv's default (0.5 for ant)"""
 
+    her: bool = True
+    """whether to use Hindsight Experience Replay: after each episode, for every real transition,
+    relabel it with achieved goals from later in the same episode (the 'future' strategy) and add
+    the relabeled copies to the replay buffer with the reward recomputed for the new goal. Primarily
+    intended for reward_type='sparse', where it turns episodes with no success into transitions with
+    real reward signal; it still produces valid transitions under reward_type='dense', but helps much
+    less there, since dense reward already gives a gradient at every step regardless of whether the
+    intended goal was reached."""
+    her_k: int = 4
+    """number of relabeled ('future'-strategy) transitions to generate per real transition, when her=True"""
+
     # Profiling
     run_profiling: bool = False
     profiling_start: int = 0
@@ -526,9 +537,64 @@ def run_periodic_validation(args: Args, env, val_agent, actor, qnet, run_name: s
     )
 
 
+def _her_relabel_episode(episode_steps: list, args: Args, device) -> list:
+    """Build HER 'future'-strategy relabeled transitions for one finished episode.
+
+    For each real transition t, samples up to k future timesteps t' >= t from the same episode,
+    substitutes the goal with the achieved xy at t', and recomputes the reward against that new
+    goal using the same distance-to-goal formula the env itself uses (see MazeEnv.compute_success
+    and RandomInitGoalEnv.step). The new goal *representation* written into the observation prefix
+    is the achieved xy when concatenate_only_goal_xy, else the achieved raw observation at t' (the
+    general analogue of the goal-obs snapshot RandomInitGoalEnv stores at reset time).
+
+    The achieved xy at any step is read directly out of its raw (post-prefix) observation rather
+    than being tracked separately: AntEnv.get_ob() (ogbench/locomaze/ant.py) concatenates qpos then
+    qvel with no exclusion, and get_xy() is qpos[:2], so the raw obs's first two entries are always
+    the agent's xy position, independent of concatenate_only_goal_xy.
+    """
+    prefix_size = args.her_prefix_size
+
+    def _achieved_xy(episode_step):
+        return episode_step["next_obs"][:, prefix_size : prefix_size + 2]
+
+    def _achieved_full(episode_step):
+        return episode_step["next_obs"][:, prefix_size:]
+
+    n = len(episode_steps)
+    relabeled = []
+    for t, step in enumerate(episode_steps):
+        num_candidates = min(args.her_k, n - t)
+        future_indices = np.random.randint(t, n, size=num_candidates)
+        for t_prime in future_indices:
+            future_step = episode_steps[t_prime]
+            new_goal_repr = (
+                _achieved_xy(future_step) if args.concatenate_only_goal_xy else _achieved_full(future_step)
+            )
+            new_obs = torch.cat([new_goal_repr, step["obs"][:, prefix_size:]], dim=1)
+            new_next_obs = torch.cat([new_goal_repr, step["next_obs"][:, prefix_size:]], dim=1)
+
+            dist = torch.linalg.norm(_achieved_xy(step) - _achieved_xy(future_step), dim=-1)
+            reward = -dist if args.reward_type == "dense" else (dist <= args.her_success_tolerance).float()
+
+            relabeled.append(
+                TensorDict(
+                    observations=new_obs,
+                    next_observations=new_next_obs,
+                    actions=step["action"],
+                    rewards=reward.view(1, 1),
+                    terminations=torch.zeros(1, dtype=torch.bool, device=device),
+                    dones=torch.zeros(1, dtype=torch.bool, device=device),
+                    batch_size=new_obs.shape[0],
+                    device=device,
+                )
+            )
+    return relabeled
+
+
 def train(args: Args, env, n_obs: int, n_act: int, action_low: float, action_high: float, run_name: str) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
     logging.info(f"Device: {device}")
+    logging.info(f"Using HER (her_k={args.her_k})" if args.her else "Not using HER")
 
     networks, policy = build_td3_networks(
         env=env,
@@ -555,6 +621,9 @@ def train(args: Args, env, n_obs: int, n_act: int, action_low: float, action_hig
         rb.extend(transition)
         return rb.sample(args.batch_size)
 
+    args.her_prefix_size = 2 if args.concatenate_only_goal_xy else n_obs // 2
+    args.her_success_tolerance = args.success_tolerance if args.success_tolerance is not None else 0.5
+
     val_agent = AntMazeTD3Agent(actor=actor, device=device, action_low=action_low, action_high=action_high)
 
     episode_idx = 0
@@ -568,6 +637,7 @@ def train(args: Args, env, n_obs: int, n_act: int, action_low: float, action_hig
     episode_had_success = False
     save_this_ep = False
     episode_frames = []
+    episode_buffer = []
 
     for global_step in pbar:
         if args.run_profiling and global_step == args.profiling_start:
@@ -618,6 +688,9 @@ def train(args: Args, env, n_obs: int, n_act: int, action_low: float, action_hig
             episode_had_success = True
 
         actions_tensor = torch.as_tensor(action, device=device, dtype=torch.float).unsqueeze(0)
+        # terminated is always False here (build_env passes terminate_at_goal=False, and AntEnv
+        # itself never terminates), so bootstrapping is never cut off by reaching a goal or a
+        # time limit -- intended, since reaching one sampled subgoal doesn't end the underlying task.
         terminations = torch.as_tensor([terminated], device=device, dtype=torch.bool)
         transition = TensorDict(
             observations=obs,
@@ -629,6 +702,9 @@ def train(args: Args, env, n_obs: int, n_act: int, action_low: float, action_hig
             batch_size=obs.shape[0],
             device=device,
         )
+
+        if args.her:
+            episode_buffer.append({"obs": obs, "next_obs": next_obs, "action": actions_tensor})
 
         obs = next_obs
         data = extend_and_sample(transition)
@@ -658,6 +734,12 @@ def train(args: Args, env, n_obs: int, n_act: int, action_low: float, action_hig
             _prof_checkpoint(args, global_step, "log_to_wandb")
 
         if done:
+            if args.her:
+                relabeled_transitions = _her_relabel_episode(episode_buffer, args, device)
+                for relabeled_transition in relabeled_transitions:
+                    rb.extend(relabeled_transition)
+            episode_buffer = []
+
             stats.record_episode(episode_return, success, episode_had_success, episode_goal_reachable)
             desc = stats.describe(global_step)
 

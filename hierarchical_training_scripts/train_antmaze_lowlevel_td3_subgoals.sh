@@ -6,8 +6,8 @@
 #SBATCH --time=48:00:00
 #SBATCH --mem=96G
 #SBATCH --partition=gpus
-#SBATCH --nodelist=gpu2001
-#SBATCH --gres=gpu:4
+#SBATCH --nodelist=gpu1904
+#SBATCH --gres=gpu:8
 
 export MUJOCO_GL=osmesa  # To enable headless rendering
 
@@ -18,6 +18,7 @@ python -m hierarchical_training_scripts.train_antmaze_lowlevel_td3_subgoals \
     --compile \
     --cudagraphs \
     --subgoal-selection-radius=2.0 \
+    --success-tolerance=1.0 \
     --reward-type=sparse \
     --maze-type=arena \
     --max-episode-steps=200 \
